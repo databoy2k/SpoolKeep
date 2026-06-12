@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- SpoolKeep: shield, filament spool, serif K (Liberation Serif glyph). -->
+  <defs><clipPath id="kclip"><path d="M 597 134 L 1070 134 L 1070 0 L 1458 0 L 1458 1341 L 1070 1341 L 1070 1207 L 597 1207 Z"/></clipPath></defs>
+  <g fill="none" stroke="#337150" stroke-width="20" stroke-linejoin="round">
+    <path d="M 256 80 Q 352 88 446 108 Q 462 336 256 470 Q 50 336 66 108 Q 160 88 256 80 Z"/>
+  </g>
+  <g transform="translate(121.69 115.67) scale(0.46548)">
+    <circle cx="210" cy="280" r="170" fill="none" stroke="#337150" stroke-width="40"/>
+    <circle cx="210" cy="280" r="62" fill="none" stroke="#2E6547" stroke-width="16"/>
+    <circle cx="210" cy="280" r="78" fill="none" stroke="#3B7E59" stroke-width="16"/>
+    <circle cx="210" cy="280" r="94" fill="none" stroke="#2E6547" stroke-width="16"/>
+    <circle cx="210" cy="280" r="110" fill="none" stroke="#3B7E59" stroke-width="16"/>
+    <circle cx="210" cy="280" r="126" fill="none" stroke="#2E6547" stroke-width="16"/>
+    <circle cx="210" cy="280" r="142" fill="none" stroke="#3B7E59" stroke-width="16"/>
+    <circle cx="210" cy="280" r="24" fill="#337150"/>
+    <circle cx="210" cy="280" r="19" fill="#D2EDD9"/>
+    <g transform="translate(358.00 125.00) scale(0.231171 -0.231171) translate(-596.82 -1341.00)">
+      <path d="M1353 1341V1288L1198 1262L740 814L1313 80L1458 53V0H1130L605 678L424 533V80L616 53V0H59V53L231 80V1262L59 1288V1341H596V1288L424 1262V630L1066 1262L933 1288V1341Z" fill="#337150" clip-path="url(#kclip)"/>
+    </g>
+  </g>
+</svg>

@@ -1,0 +1,12 @@
+services:
+  spoolkeep:
+    build: .
+    container_name: spoolkeep
+    ports:
+      - "5050:5050"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-}
+    restart: unless-stopped
