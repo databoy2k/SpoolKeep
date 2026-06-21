@@ -28,6 +28,7 @@ import ModelDetailsModal from './components/ModelDetailsModal';
 import PrintFileCard from './components/PrintFileCard';
 import SpoolCard from './components/SpoolCard';
 import AddEditSpoolModal from './components/AddEditSpoolModal';
+import FilamentExportDefaultsModal, { FILAMENT_EXPORT_DEFAULTS } from './components/FilamentExportDefaultsModal';
 
 export default function App() {
   // Theme State
@@ -135,6 +136,9 @@ export default function App() {
   const [isNfcSupported, setIsNfcSupported] = useState(false);
   const [td1sEnabled, setTd1sEnabled] = useState(false);
   const [dataFolderSize, setDataFolderSize] = useState(0);
+  const [filamentExportDefaults, setFilamentExportDefaults] = useState(FILAMENT_EXPORT_DEFAULTS);
+  const [isFilamentExportDefaultsModalOpen, setIsFilamentExportDefaultsModalOpen] = useState(false);
+
   // RFID data for pre-filling AddEditSpoolModal form
   const [rfidFormData, setRfidFormData] = useState(null);
 
@@ -570,6 +574,7 @@ export default function App() {
       if (data.defaultFilesSort) setFileSort(data.defaultFilesSort);
       setTd1sEnabled(data.td1sEnabled || false);
       setDataFolderSize(data.dataFolderSize || 0);
+      if (data.filamentExportDefaults) setFilamentExportDefaults(data.filamentExportDefaults);
     } catch (error) {
       console.error('Failed to fetch settings:', error);
     }
@@ -601,6 +606,22 @@ export default function App() {
     } catch (error) {
       console.error('Failed to save settings:', error);
       toast.error('Network error while saving settings');
+    }
+  };
+
+  const handleSaveFilamentExportDefaults = async (newDefaults) => {
+    try {
+      await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filamentExportDefaults: newDefaults }),
+      });
+      setFilamentExportDefaults(newDefaults);
+      setIsFilamentExportDefaultsModalOpen(false);
+      toast.success('Filament export defaults saved.');
+    } catch (error) {
+      console.error('Failed to save filament export defaults:', error);
+      toast.error('Network error while saving filament export defaults');
     }
   };
 
@@ -995,21 +1016,10 @@ export default function App() {
       const avgTempNum = Math.round((minTempNum + maxTempNum) / 2);
       const bedMaxTempNum = Number(spool.bedMaxTemp) || 60;
 
-      // Per-material cooling/fan overrides. OrcaSlicer's generic base profiles inherit
-      // aggressive defaults that hurt materials like PETG (too much fan = delamination).
-      const materialDefaults = {
-        PLA:  { fan_min_speed: '35', fan_max_speed: '100', fan_cooling_layer_time: '20', slow_down_layer_time: '8',  slow_down_min_speed: '10' },
-        PETG: { fan_min_speed: '20', fan_max_speed: '80',  fan_cooling_layer_time: '20', slow_down_layer_time: '8',  slow_down_min_speed: '10' },
-        ABS:  { fan_min_speed: '0',  fan_max_speed: '30',  fan_cooling_layer_time: '20', slow_down_layer_time: '8',  slow_down_min_speed: '10' },
-        ASA:  { fan_min_speed: '0',  fan_max_speed: '30',  fan_cooling_layer_time: '20', slow_down_layer_time: '8',  slow_down_min_speed: '10' },
-        TPU:  { fan_min_speed: '30', fan_max_speed: '80',  fan_cooling_layer_time: '20', slow_down_layer_time: '8',  slow_down_min_speed: '10' },
-        PA:   { fan_min_speed: '0',  fan_max_speed: '30',  fan_cooling_layer_time: '20', slow_down_layer_time: '8',  slow_down_min_speed: '10' },
-        PC:   { fan_min_speed: '0',  fan_max_speed: '20',  fan_cooling_layer_time: '20', slow_down_layer_time: '8',  slow_down_min_speed: '10' },
-      };
-      const materialKey = Object.keys(materialDefaults).find(k =>
+      const materialKey = Object.keys(filamentExportDefaults).find(k =>
         k === 'PA' ? (baseType.includes('PA') || baseType.includes('NYLON')) : baseType.includes(k)
       );
-      const cooling = materialDefaults[materialKey] || {};
+      const cooling = filamentExportDefaults[materialKey] || {};
 
       const profileName = `${spool.brand} ${spool.name}`;
       const preset = {
@@ -1718,6 +1728,15 @@ export default function App() {
         td1sEnabled={td1sEnabled}
         setTd1sEnabled={setTd1sEnabled}
         dataFolderSize={dataFolderSize}
+        onOpenFilamentDefaults={() => setIsFilamentExportDefaultsModalOpen(true)}
+      />
+
+      <FilamentExportDefaultsModal
+        isOpen={isFilamentExportDefaultsModalOpen}
+        onClose={() => setIsFilamentExportDefaultsModalOpen(false)}
+        defaults={filamentExportDefaults}
+        onSave={handleSaveFilamentExportDefaults}
+        spools={spools}
       />
 
       <ModelDetailsModal

@@ -1,5 +1,5 @@
 /* global __APP_VERSION__ */
-import { Settings, X, AlertCircle } from 'lucide-react';
+import { Settings, X, AlertCircle, Layers } from 'lucide-react';
 
 function fmtBytes(bytes) {
   if (!bytes) return '0 B';
@@ -29,7 +29,8 @@ export default function SettingsModal({
   setDefaultFilesSort,
   td1sEnabled,
   setTd1sEnabled,
-  dataFolderSize = 0
+  dataFolderSize = 0,
+  onOpenFilamentDefaults,
 }) {
   if (!isOpen) return null;
 
@@ -147,6 +148,23 @@ export default function SettingsModal({
                 style={{ width: '18px', height: '18px', accentColor: 'var(--md-sys-color-primary)', flexShrink: 0, marginLeft: '1rem' }}
               />
             </label>
+          </div>
+
+          {/* OrcaSlicer Export */}
+          <div style={{ borderTop: '1px solid var(--md-sys-color-outline-variant)', paddingTop: '1.25rem', marginTop: '1.5rem' }}>
+            <h3 style={{ fontSize: '1rem', fontWeight: '600', marginBottom: '0.5rem' }}>OrcaSlicer Export</h3>
+            <p style={{ fontSize: '0.78rem', color: 'var(--md-sys-color-outline)', marginBottom: '0.75rem', lineHeight: '1.5' }}>
+              Configure the per-material cooling and speed values written into exported filament profiles.
+            </p>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem' }}
+              onClick={onOpenFilamentDefaults}
+            >
+              <Layers size={15} />
+              Filament Export Details
+            </button>
           </div>
 
           {/* Google Gemini API Key */}

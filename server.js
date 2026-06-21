@@ -478,6 +478,7 @@ app.get('/api/settings', async (_req, res) => {
       defaultSpoolSort: settings.defaultSpoolSort || 'colour',
       defaultFilesSort: settings.defaultFilesSort || 'dateAddedNewest',
       td1sEnabled: settings.td1sEnabled || false,
+      filamentExportDefaults: settings.filamentExportDefaults || null,
       dataFolderSize: await getDataDirSize(path.join(__dirname, 'data'))
     });
   } catch (error) {
@@ -513,6 +514,10 @@ app.post('/api/settings', async (req, res) => {
     }
     if (req.body.td1sEnabled !== undefined) {
       settings.td1sEnabled = !!req.body.td1sEnabled;
+      await fs.writeJson(SETTINGS_FILE, settings);
+    }
+    if (req.body.filamentExportDefaults !== undefined) {
+      settings.filamentExportDefaults = req.body.filamentExportDefaults;
       await fs.writeJson(SETTINGS_FILE, settings);
     }
 
