@@ -52,6 +52,14 @@ Each print file can have multiple colour versions — named filament slot assign
 - Scanning a linked tag surfaces the matching spool instantly
 - Unknown tags open a pre-filled form so you can review and save the new spool
 
+### Spoolman API / Snapmaker U1 Printer Integration (SpoolLink)
+SpoolKeep exposes a Spoolman-compatible API (`/api/v1/*`, including the spool event websocket), so anything that can talk to [Spoolman](https://github.com/Donkie/Spoolman) can talk to SpoolKeep. In particular, the [SnapmakerU1-Extended-Firmware](https://github.com/paxx12-snapmaker-u1/SnapmakerU1-Extended-Firmware) Spoolman/SpoolLink integration connects directly:
+
+1. In Fluidd/Mainsail on the printer, open **Snapmaker Components → Spoolman Integration**, set it to **Enabled**, and enter your SpoolKeep URL (e.g. `http://192.168.1.50:5050`).
+2. The printer resolves scanned RFID cards against your SpoolKeep inventory, auto-binds card UIDs to spools, and applies brand/material/colour to the channel.
+3. Assign a spool to a lane with `SET_SPOOL_ID LANE=E0 SPOOL_ID=<n>` — spool numbers are shown by the API (`GET /api/v1/spool`).
+4. While printing, filament usage is reported back every few seconds and SpoolKeep updates the spool's used percentage automatically (set each spool's *Spool Filament Weight* for accurate tracking on non-1kg spools).
+
 ### TD1s Spectrometer
 Optional integration with the TD1s colorimeter for hardware colour measurement. When enabled (Settings → Hardware Integrations), a connection badge appears beside the Filament Colour field on the Add/Edit Spool form. Connect via USB HID, USB Serial, or Web MIDI and tap the device to capture the measured hex value directly.
 

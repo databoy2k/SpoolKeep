@@ -40,6 +40,7 @@ export default function AddEditSpoolModal({
   const [formRfidId, setFormRfidId] = useState(null);
   const [formOpened, setFormOpened] = useState(false);
   const [formDateOpened, setFormDateOpened] = useState('');
+  const [formNetWeight, setFormNetWeight] = useState('1000');
 
   // Show color popover state
   const [showColorPopover, setShowColorPopover] = useState(false);
@@ -146,6 +147,8 @@ export default function AddEditSpoolModal({
       setFormRfidId(editingSpool.rfidId || null);
       setFormOpened(editingSpool.opened || false);
       setFormDateOpened(editingSpool.dateOpened || '');
+      setFormNetWeight(editingSpool.netWeight !== undefined && editingSpool.netWeight !== null ? String(editingSpool.netWeight) : '1000');
+      setStartingWeight(editingSpool.netWeight !== undefined && editingSpool.netWeight !== null ? String(editingSpool.netWeight) : '1000');
     } else {
       setFormName('');
       setFormBrand('');
@@ -164,6 +167,8 @@ export default function AddEditSpoolModal({
       setFormRfidId(null);
       setFormOpened(false);
       setFormDateOpened('');
+      setFormNetWeight('1000');
+      setStartingWeight('1000');
     }
 
     // Reset helper states
@@ -1032,6 +1037,7 @@ export default function AddEditSpoolModal({
       bedMinTemp: parseInt(formBedMinTemp),
       bedMaxTemp: parseInt(formBedMaxTemp),
       usedPercentage: parseInt(formUsedPercentage),
+      netWeight: parseFloat(formNetWeight) > 0 ? parseFloat(formNetWeight) : 1000,
       exportedToOrca: formExportedToOrca,
       td: formTd !== '' ? parseFloat(formTd) : null,
       notes: formNotes,
@@ -2139,6 +2145,20 @@ export default function AddEditSpoolModal({
                 style={{ width: '100%', margin: '0.5rem 0' }}
                 value={formUsedPercentage}
                 onChange={(e) => setFormUsedPercentage(e.target.value)}
+              />
+            </div>
+
+            <div className="form-group">
+              <label className="form-label">Spool Filament Weight (g)</label>
+              <input
+                type="number"
+                step="any"
+                min="1"
+                className="form-input"
+                placeholder="1000"
+                value={formNetWeight}
+                onChange={(e) => setFormNetWeight(e.target.value)}
+                title="Net filament weight when the spool is full — used for Spoolman/printer usage tracking"
               />
             </div>
 

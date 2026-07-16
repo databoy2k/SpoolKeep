@@ -7,6 +7,7 @@ const path = require('path');
 const crypto = require('crypto');
 const multer = require('multer');
 const AdmZip = require('adm-zip');
+const spoolmanApi = require('./spoolman-api');
 
 const app = express();
 const PORT = process.env.PORT || 5050;
@@ -14,6 +15,7 @@ const DB_FILE = path.join(__dirname, 'data', 'spools.json');
 const SETTINGS_FILE = path.join(__dirname, 'data', 'settings.json');
 const LOG_FILE = path.join(__dirname, 'data', 'spoolkeep.log');
 const PRINT_FILES_FILE = path.join(__dirname, 'data', 'print_files.json');
+const SPOOLMAN_FIELDS_FILE = path.join(__dirname, 'data', 'spoolman_fields.json');
 const UPLOADS_DIR = path.join(__dirname, 'data', 'uploads');
 
 // Multer configuration for file uploads
@@ -74,13 +76,22 @@ async function initDb() {
           migrated = true;
         }
       });
+      // Ensure Spoolman-compatibility fields (spoolmanId, cardUids, netWeight, usedWeight)
+      if (spoolmanApi.migrateSpoolsForSpoolman(spools)) {
+        migrated = true;
+        logMsg('INFO', 'Database migrated with Spoolman-compatibility fields');
+      }
       if (migrated) {
         await fs.writeJson(DB_FILE, spools);
         logMsg('INFO', 'Database migrated to use Canadian spelling (colourHex)');
       }
     } catch (err) {
-      logMsg('ERROR', 'Failed to migrate database to colourHex', err);
+      logMsg('ERROR', 'Failed to migrate spools database', err);
     }
+  }
+
+  if (!(await fs.pathExists(SPOOLMAN_FIELDS_FILE))) {
+    await fs.writeJson(SPOOLMAN_FIELDS_FILE, { spool: [], filament: [], vendor: [] });
   }
 
   if (!(await fs.pathExists(PRINT_FILES_FILE))) {
@@ -346,10 +357,16 @@ app.post('/api/spools', async (req, res) => {
       stock: req.body.stock !== undefined ? parseInt(req.body.stock) : 1,
       opened: req.body.opened !== undefined ? !!req.body.opened : false,
       dateOpened: req.body.dateOpened || null,
-      dateAdded: req.body.dateAdded || new Date().toISOString()
+      dateAdded: req.body.dateAdded || new Date().toISOString(),
+      // Spoolman-compatibility fields (used by the printer's SpoolLink integration)
+      spoolmanId: spoolmanApi.nextSpoolmanId(spools),
+      cardUids: [],
+      netWeight: parseFloat(req.body.netWeight) > 0 ? parseFloat(req.body.netWeight) : 1000
     };
+    newSpool.usedWeight = (newSpool.usedPercentage / 100) * newSpool.netWeight;
     spools.push(newSpool);
     await fs.writeJson(DB_FILE, spools);
+    spoolmanApi.broadcastSpoolEvent('added', newSpool);
     res.status(201).json(newSpool);
   } catch (error) {
     res.status(500).json({ error: 'Failed to save spool' });
@@ -383,10 +400,19 @@ app.put('/api/spools/:id', async (req, res) => {
       stock: req.body.stock !== undefined ? parseInt(req.body.stock) : (spools[index].stock !== undefined ? spools[index].stock : 1),
       opened: req.body.opened !== undefined ? !!req.body.opened : (spools[index].opened !== undefined ? !!spools[index].opened : false),
       dateOpened: req.body.dateOpened !== undefined ? req.body.dateOpened : (spools[index].dateOpened || null),
-      dateAdded: req.body.dateAdded !== undefined ? req.body.dateAdded : (spools[index].dateAdded || new Date().toISOString())
+      dateAdded: req.body.dateAdded !== undefined ? req.body.dateAdded : (spools[index].dateAdded || new Date().toISOString()),
+      netWeight: parseFloat(req.body.netWeight) > 0 ? parseFloat(req.body.netWeight)
+        : (parseFloat(spools[index].netWeight) > 0 ? parseFloat(spools[index].netWeight) : 1000)
     };
 
+    // Keep usedWeight (grams, used by Spoolman usage tracking) in sync when
+    // the user edits usedPercentage or the spool's net weight from the UI.
+    if (req.body.usedPercentage !== undefined || req.body.netWeight !== undefined) {
+      spools[index].usedWeight = (spools[index].usedPercentage / 100) * spools[index].netWeight;
+    }
+
     await fs.writeJson(DB_FILE, spools);
+    spoolmanApi.broadcastSpoolEvent('updated', spools[index]);
     res.json(spools[index]);
   } catch (error) {
     res.status(500).json({ error: 'Failed to update spool' });
@@ -396,12 +422,13 @@ app.put('/api/spools/:id', async (req, res) => {
 app.delete('/api/spools/:id', async (req, res) => {
   try {
     let spools = await fs.readJson(DB_FILE);
-    const initialLength = spools.length;
+    const deletedSpool = spools.find(s => s.id === req.params.id);
     spools = spools.filter(s => s.id !== req.params.id);
-    if (spools.length === initialLength) {
+    if (!deletedSpool) {
       return res.status(404).json({ error: 'Spool not found' });
     }
     await fs.writeJson(DB_FILE, spools);
+    spoolmanApi.broadcastSpoolEvent('deleted', deletedSpool);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: 'Failed to delete spool' });
@@ -415,12 +442,23 @@ app.post('/api/spools/bulk-delete', async (req, res) => {
       return res.status(400).json({ error: 'IDs must be an array' });
     }
     let spools = await fs.readJson(DB_FILE);
+    const deletedSpools = spools.filter(s => ids.includes(s.id));
     spools = spools.filter(s => !ids.includes(s.id));
     await fs.writeJson(DB_FILE, spools);
+    deletedSpools.forEach(s => spoolmanApi.broadcastSpoolEvent('deleted', s));
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: 'Failed to bulk delete spools' });
   }
+});
+
+// Spoolman-compatible API (/api/v1/*) — lets the Snapmaker U1 extended
+// firmware's Spoolman/SpoolLink integration connect to SpoolKeep directly.
+spoolmanApi.registerSpoolmanApi(app, {
+  dbFile: DB_FILE,
+  fieldsFile: SPOOLMAN_FIELDS_FILE,
+  dataDir: path.join(__dirname, 'data'),
+  logMsg
 });
 
 // 2. Web Scraper
@@ -1732,9 +1770,12 @@ if (fs.existsSync(distPath)) {
 // Start Server
 initDb().then(() => {
   logMsg('INFO', 'Database initialized successfully');
-  app.listen(PORT, () => {
+  const server = app.listen(PORT, () => {
     logMsg('INFO', `SpoolKeep Backend running on port ${PORT}`);
   });
+  // Spoolman event websocket (ws://host:port/api/v1/spool) — required by
+  // Moonraker's [spoolman] component for usage tracking.
+  spoolmanApi.attachSpoolmanWebSocket(server);
 }).catch(err => {
   logMsg('ERROR', 'Database initialization error', err);
 });
