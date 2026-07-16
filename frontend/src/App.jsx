@@ -167,11 +167,29 @@ export default function App() {
     fetchSettings();
     setIsNfcSupported('NDEFReader' in window);
 
-    const handler = (e) => { e.preventDefault(); setInstallPromptEvent(e); };
+    const handler = (e) => {
+      e.preventDefault();
+      // Respect a previous dismissal for 30 days
+      const dismissedAt = parseInt(localStorage.getItem('spoolkeep-install-dismissed') || '0', 10);
+      if (dismissedAt && Date.now() - dismissedAt < 30 * 24 * 60 * 60 * 1000) return;
+      setInstallPromptEvent(e);
+    };
     window.addEventListener('beforeinstallprompt', handler);
     window.addEventListener('appinstalled', () => setInstallPromptEvent(null));
     return () => window.removeEventListener('beforeinstallprompt', handler);
   }, []);
+
+  // Auto-hide the install banner if it's ignored for 15 seconds
+  useEffect(() => {
+    if (!installPromptEvent) return;
+    const timer = setTimeout(() => setInstallPromptEvent(null), 15000);
+    return () => clearTimeout(timer);
+  }, [installPromptEvent]);
+
+  const handleDismissInstallPwa = () => {
+    localStorage.setItem('spoolkeep-install-dismissed', String(Date.now()));
+    setInstallPromptEvent(null);
+  };
 
   const handleInstallPwa = async () => {
     if (!installPromptEvent) return;
@@ -1195,7 +1213,7 @@ export default function App() {
             <div style={{ fontSize: '0.75rem', color: 'var(--md-sys-color-outline)', marginTop: '0.1rem' }}>SpoolKeep operates best as a PWA installed on your desktop. Install it to integrate it into your system and ensure easy access to it.</div>
           </div>
           <button className="btn btn-primary" style={{ flexShrink: 0, padding: '0.4rem 0.9rem', fontSize: '0.8rem' }} onClick={handleInstallPwa}>Install</button>
-          <button onClick={() => setInstallPromptEvent(null)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--md-sys-color-outline)', padding: '0.25rem', flexShrink: 0 }}>
+          <button onClick={handleDismissInstallPwa} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--md-sys-color-outline)', padding: '0.25rem', flexShrink: 0 }}>
             <X size={16} />
           </button>
         </div>
