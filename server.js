@@ -101,7 +101,19 @@ async function initDb() {
   if (!(await fs.pathExists(SETTINGS_FILE))) {
     await fs.writeJson(SETTINGS_FILE, { geminiApiKey: '' });
   }
+
+  // Cache the Spoolman API toggle (default enabled)
+  try {
+    const settings = await fs.readJson(SETTINGS_FILE);
+    spoolmanEnabled = settings.spoolmanEnabled !== false;
+  } catch {
+    spoolmanEnabled = true;
+  }
 }
+
+// Whether the Spoolman-compatible API (/api/v1/*) is enabled; kept in sync
+// with the spoolmanEnabled setting so the toggle takes effect without restart.
+let spoolmanEnabled = true;
 
 // Encryption/Decryption Helpers for secure settings storage
 function encryptKey(text) {
@@ -458,7 +470,8 @@ spoolmanApi.registerSpoolmanApi(app, {
   dbFile: DB_FILE,
   fieldsFile: SPOOLMAN_FIELDS_FILE,
   dataDir: path.join(__dirname, 'data'),
-  logMsg
+  logMsg,
+  isEnabled: () => spoolmanEnabled
 });
 
 // 2. Web Scraper
@@ -516,6 +529,7 @@ app.get('/api/settings', async (_req, res) => {
       defaultSpoolSort: settings.defaultSpoolSort || 'colour',
       defaultFilesSort: settings.defaultFilesSort || 'dateAddedNewest',
       td1sEnabled: settings.td1sEnabled || false,
+      spoolmanEnabled: settings.spoolmanEnabled !== false,
       dataFolderSize: await getDataDirSize(path.join(__dirname, 'data'))
     });
   } catch (error) {
@@ -553,6 +567,18 @@ app.post('/api/settings', async (req, res) => {
       settings.td1sEnabled = !!req.body.td1sEnabled;
       await fs.writeJson(SETTINGS_FILE, settings);
     }
+    if (req.body.spoolmanEnabled !== undefined) {
+      settings.spoolmanEnabled = !!req.body.spoolmanEnabled;
+      await fs.writeJson(SETTINGS_FILE, settings);
+      const wasEnabled = spoolmanEnabled;
+      spoolmanEnabled = settings.spoolmanEnabled;
+      if (wasEnabled && !spoolmanEnabled) {
+        spoolmanApi.closeWsClients();
+        logMsg('INFO', 'Spoolman API disabled via settings');
+      } else if (!wasEnabled && spoolmanEnabled) {
+        logMsg('INFO', 'Spoolman API enabled via settings');
+      }
+    }
 
     const decryptedKey = decryptKey(settings.geminiApiKey);
     const activeKey = envKey || decryptedKey;
@@ -569,7 +595,8 @@ app.post('/api/settings', async (req, res) => {
       isEnvOverridden,
       defaultSpoolSort: settings.defaultSpoolSort || 'colour',
       defaultFilesSort: settings.defaultFilesSort || 'dateAddedNewest',
-      td1sEnabled: settings.td1sEnabled || false
+      td1sEnabled: settings.td1sEnabled || false,
+      spoolmanEnabled: settings.spoolmanEnabled !== false
     });
   } catch (error) {
     res.status(500).json({ error: 'Failed to save settings' });

@@ -29,6 +29,8 @@ export default function SettingsModal({
   setDefaultFilesSort,
   td1sEnabled,
   setTd1sEnabled,
+  spoolmanEnabled = true,
+  setSpoolmanEnabled,
   dataFolderSize = 0
 }) {
   if (!isOpen) return null;
@@ -144,6 +146,18 @@ export default function SettingsModal({
                 type="checkbox"
                 checked={td1sEnabled || false}
                 onChange={(e) => setTd1sEnabled(e.target.checked)}
+                style={{ width: '18px', height: '18px', accentColor: 'var(--md-sys-color-primary)', flexShrink: 0, marginLeft: '1rem' }}
+              />
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', cursor: 'pointer', padding: '0.5rem 0.75rem', borderRadius: 'var(--md-shape-corner-medium)', border: '1px solid var(--md-sys-color-outline-variant)', backgroundColor: 'var(--md-sys-color-surface-container-high)', marginTop: '0.5rem' }}>
+              <div>
+                <div style={{ fontWeight: '600', fontSize: '0.9rem' }}>Spoolman API (Printer Integration)</div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--md-sys-color-outline)', marginTop: '0.15rem' }}>Expose a Spoolman-compatible API so printers (e.g. Snapmaker U1 SpoolLink) can resolve spools and report filament usage</div>
+              </div>
+              <input
+                type="checkbox"
+                checked={spoolmanEnabled !== false}
+                onChange={(e) => setSpoolmanEnabled(e.target.checked)}
                 style={{ width: '18px', height: '18px', accentColor: 'var(--md-sys-color-primary)', flexShrink: 0, marginLeft: '1rem' }}
               />
             </label>

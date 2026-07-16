@@ -32,8 +32,18 @@ const MATERIAL_DENSITIES = {
 const DEFAULT_DENSITY = 1.24;
 const DEFAULT_NET_WEIGHT = 1000;
 
-let deps = null; // { dbFile, fieldsFile, dataDir, logMsg }
+let deps = null; // { dbFile, fieldsFile, dataDir, logMsg, isEnabled }
 let wss = null;
+
+function apiEnabled() {
+  return !deps || !deps.isEnabled || deps.isEnabled();
+}
+
+// Close all connected websocket clients (used when the API is disabled from settings)
+function closeWsClients() {
+  if (!wss) return;
+  wss.clients.forEach((ws) => ws.close(1001, 'Spoolman API disabled'));
+}
 
 function densityFor(type) {
   const key = String(type || '').toUpperCase();
@@ -220,7 +230,7 @@ function attachSpoolmanWebSocket(httpServer) {
 
   httpServer.on('upgrade', (req, socket, head) => {
     const pathname = (req.url || '').split('?')[0].replace(/\/+$/, '');
-    if (pathname === '/api/v1/spool') {
+    if (pathname === '/api/v1/spool' && apiEnabled()) {
       wss.handleUpgrade(req, socket, head, (ws) => {
         wss.emit('connection', ws, req);
       });
@@ -254,7 +264,7 @@ function attachSpoolmanWebSocket(httpServer) {
 // Broadcast a Spoolman-format resource event to all websocket clients.
 // type: 'added' | 'updated' | 'deleted'; spool: SpoolKeep spool record.
 function broadcastSpoolEvent(type, spool) {
-  if (!wss || !spool || !Number.isFinite(spool.spoolmanId)) return;
+  if (!wss || !spool || !Number.isFinite(spool.spoolmanId) || !apiEnabled()) return;
   const message = JSON.stringify({
     type,
     resource: 'spool',
@@ -273,8 +283,15 @@ function registerSpoolmanApi(app, options) {
     dbFile: options.dbFile,
     fieldsFile: options.fieldsFile,
     dataDir: options.dataDir,
-    logMsg: options.logMsg || (() => {})
+    logMsg: options.logMsg || (() => {}),
+    isEnabled: options.isEnabled || (() => true)
   };
+
+  // Gate every /api/v1 route on the spoolmanEnabled setting
+  app.use('/api/v1', (_req, res, next) => {
+    if (apiEnabled()) return next();
+    res.status(503).json({ message: 'Spoolman API is disabled in SpoolKeep settings' });
+  });
 
   app.get('/api/v1/info', (_req, res) => {
     res.json({
@@ -446,6 +463,7 @@ module.exports = {
   registerSpoolmanApi,
   attachSpoolmanWebSocket,
   broadcastSpoolEvent,
+  closeWsClients,
   migrateSpoolsForSpoolman,
   nextSpoolmanId,
   toSpoolmanSpool

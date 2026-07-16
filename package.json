@@ -1,6 +1,6 @@
 {
   "name": "spool-keep",
-  "version": "1.0.0-alpha.5",
+  "version": "1.0.0-beta.2",
   "description": "Lightweight 3D printing filament spool manager, RFID tag writer, and OrcaSlicer profile generator.",
   "main": "server.js",
   "scripts": {

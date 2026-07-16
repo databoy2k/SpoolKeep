@@ -134,6 +134,7 @@ export default function App() {
   const [isEnvOverridden, setIsEnvOverridden] = useState(false);
   const [isNfcSupported, setIsNfcSupported] = useState(false);
   const [td1sEnabled, setTd1sEnabled] = useState(false);
+  const [spoolmanEnabled, setSpoolmanEnabled] = useState(true);
   const [dataFolderSize, setDataFolderSize] = useState(0);
 
   // RFID data for pre-filling AddEditSpoolModal form
@@ -570,6 +571,7 @@ export default function App() {
       if (data.defaultSpoolSort) setSortBy(data.defaultSpoolSort);
       if (data.defaultFilesSort) setFileSort(data.defaultFilesSort);
       setTd1sEnabled(data.td1sEnabled || false);
+      setSpoolmanEnabled(data.spoolmanEnabled !== false);
       setDataFolderSize(data.dataFolderSize || 0);
     } catch (error) {
       console.error('Failed to fetch settings:', error);
@@ -587,7 +589,7 @@ export default function App() {
       const response = await fetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ geminiApiKey, defaultSpoolSort: sortBy, defaultFilesSort: fileSort, td1sEnabled })
+        body: JSON.stringify({ geminiApiKey, defaultSpoolSort: sortBy, defaultFilesSort: fileSort, td1sEnabled, spoolmanEnabled })
       });
       const data = await response.json();
       if (response.ok) {
@@ -1697,6 +1699,8 @@ export default function App() {
         setDefaultFilesSort={setFileSort}
         td1sEnabled={td1sEnabled}
         setTd1sEnabled={setTd1sEnabled}
+        spoolmanEnabled={spoolmanEnabled}
+        setSpoolmanEnabled={setSpoolmanEnabled}
         dataFolderSize={dataFolderSize}
       />
 
