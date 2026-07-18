@@ -28,6 +28,7 @@ import ModelDetailsModal from './components/ModelDetailsModal';
 import PrintFileCard from './components/PrintFileCard';
 import SpoolCard from './components/SpoolCard';
 import AddEditSpoolModal from './components/AddEditSpoolModal';
+import FilamentExportDefaultsModal, { FILAMENT_EXPORT_DEFAULTS } from './components/FilamentExportDefaultsModal';
 
 export default function App() {
   // Theme State
@@ -135,6 +136,8 @@ export default function App() {
   const [isNfcSupported, setIsNfcSupported] = useState(false);
   const [td1sEnabled, setTd1sEnabled] = useState(false);
   const [dataFolderSize, setDataFolderSize] = useState(0);
+  const [filamentExportDefaults, setFilamentExportDefaults] = useState(FILAMENT_EXPORT_DEFAULTS);
+  const [isFilamentExportDefaultsModalOpen, setIsFilamentExportDefaultsModalOpen] = useState(false);
 
   // RFID data for pre-filling AddEditSpoolModal form
   const [rfidFormData, setRfidFormData] = useState(null);
@@ -571,6 +574,7 @@ export default function App() {
       if (data.defaultFilesSort) setFileSort(data.defaultFilesSort);
       setTd1sEnabled(data.td1sEnabled || false);
       setDataFolderSize(data.dataFolderSize || 0);
+      if (data.filamentExportDefaults) setFilamentExportDefaults(data.filamentExportDefaults);
     } catch (error) {
       console.error('Failed to fetch settings:', error);
     }
@@ -602,6 +606,22 @@ export default function App() {
     } catch (error) {
       console.error('Failed to save settings:', error);
       toast.error('Network error while saving settings');
+    }
+  };
+
+  const handleSaveFilamentExportDefaults = async (newDefaults) => {
+    try {
+      await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filamentExportDefaults: newDefaults }),
+      });
+      setFilamentExportDefaults(newDefaults);
+      setIsFilamentExportDefaultsModalOpen(false);
+      toast.success('Filament export defaults saved.');
+    } catch (error) {
+      console.error('Failed to save filament export defaults:', error);
+      toast.error('Network error while saving filament export defaults');
     }
   };
 
@@ -996,16 +1016,25 @@ export default function App() {
       const avgTempNum = Math.round((minTempNum + maxTempNum) / 2);
       const bedMaxTempNum = Number(spool.bedMaxTemp) || 60;
 
+      const materialKey = Object.keys(filamentExportDefaults).find(k =>
+        k === 'PA' ? (baseType.includes('PA') || baseType.includes('NYLON')) : baseType.includes(k)
+      );
+      const cooling = filamentExportDefaults[materialKey] || {};
+
+      const profileName = `${spool.brand} ${spool.name}`;
       const preset = {
-        name: `${spool.brand} ${spool.name}`,
+        name: profileName,
         from: 'User',
         inherits: inheritsParent,
-        is_custom_defined: '0',
         version: '2.2.43.2',
-        filament_settings_id: [`${spool.brand} ${spool.name}`],
+        filament_settings_id: [profileName],
         filament_vendor: [spool.brand],
         filament_type: [spool.type],
         default_filament_colour: [spool.colourHex || spool.colorHex],
+        compatible_printers: [],
+        compatible_printers_condition: '',
+        compatible_prints: [],
+        compatible_prints_condition: '',
         nozzle_temperature_range_low: [String(minTempNum)],
         nozzle_temperature_range_high: [String(maxTempNum)],
         nozzle_temperature: [String(avgTempNum)],
@@ -1014,11 +1043,12 @@ export default function App() {
         hot_plate_temp_initial_layer: [String(bedMaxTempNum)],
         textured_plate_temp: [String(bedMaxTempNum)],
         textured_plate_temp_initial_layer: [String(bedMaxTempNum)],
-        filament_density: [density]
+        filament_density: [density],
+        ...Object.fromEntries(Object.entries(cooling).map(([k, v]) => [k, [v]])),
       };
 
-      const filename = `${spool.brand.toLowerCase()}_${cleanName.toLowerCase()}.json`;
-      zip.file(filename, JSON.stringify(preset, null, 2));
+      // Filename must match the name field exactly for OrcaSlicer to accept the import
+      zip.file(`filament/${profileName}.json`, JSON.stringify(preset, null, 2));
     });
 
     try {
@@ -1698,6 +1728,15 @@ export default function App() {
         td1sEnabled={td1sEnabled}
         setTd1sEnabled={setTd1sEnabled}
         dataFolderSize={dataFolderSize}
+        onOpenFilamentDefaults={() => setIsFilamentExportDefaultsModalOpen(true)}
+      />
+
+      <FilamentExportDefaultsModal
+        isOpen={isFilamentExportDefaultsModalOpen}
+        onClose={() => setIsFilamentExportDefaultsModalOpen(false)}
+        defaults={filamentExportDefaults}
+        onSave={handleSaveFilamentExportDefaults}
+        spools={spools}
       />
 
       <ModelDetailsModal
