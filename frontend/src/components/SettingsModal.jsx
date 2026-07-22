@@ -1,6 +1,5 @@
 /* global __APP_VERSION__ */
-import { Settings, X, AlertCircle } from 'lucide-react';
-import FilamentDefaultsSection from './FilamentDefaultsSection';
+import { Settings, X, AlertCircle, ChevronRight } from 'lucide-react';
 
 function fmtBytes(bytes) {
   if (!bytes) return '0 B';
@@ -33,17 +32,7 @@ export default function SettingsModal({
   spoolmanEnabled = true,
   setSpoolmanEnabled,
   dataFolderSize = 0,
-  filamentBaselines = {},
-  filamentBaselineOverrides = {},
-  setFilamentBaselineOverrides,
-  presetGlobals = {},
-  setPresetGlobals,
-  curatedFields = [],
-  profileDbEnabled = false,
-  setProfileDbEnabled,
-  profileDbStatus,
-  onRefreshProfileDb,
-  onLoadProfileDbStatus
+  onOpenFilamentDefaults
 }) {
   if (!isOpen) return null;
 
@@ -175,20 +164,38 @@ export default function SettingsModal({
             </label>
           </div>
 
-          {/* Filament Profile Defaults + SimplyPrint profile database */}
-          <FilamentDefaultsSection
-            baselines={filamentBaselines}
-            overrides={filamentBaselineOverrides}
-            setOverrides={setFilamentBaselineOverrides}
-            globals={presetGlobals}
-            setGlobals={setPresetGlobals}
-            curatedFields={curatedFields}
-            profileDbEnabled={profileDbEnabled}
-            setProfileDbEnabled={setProfileDbEnabled}
-            profileDbStatus={profileDbStatus}
-            onRefreshProfileDb={onRefreshProfileDb}
-            onLoadProfileDbStatus={onLoadProfileDbStatus}
-          />
+          {/* Filament profile defaults live on their own page -- the baseline
+              tables and the profile database are far too large for this modal. */}
+          <div style={{ borderTop: '1px solid var(--md-sys-color-outline-variant)', paddingTop: '1.25rem', marginTop: '1.5rem' }}>
+            <h3 style={{ fontSize: '1rem', fontWeight: '600', marginBottom: '0.75rem' }}>Filament Profiles</h3>
+            <button
+              type="button"
+              onClick={onOpenFilamentDefaults}
+              style={{
+                width: '100%',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '1rem',
+                textAlign: 'left',
+                cursor: 'pointer',
+                padding: '0.6rem 0.75rem',
+                borderRadius: 'var(--md-shape-corner-medium)',
+                border: '1px solid var(--md-sys-color-outline-variant)',
+                backgroundColor: 'var(--md-sys-color-surface-container-high)',
+                color: 'inherit',
+                font: 'inherit'
+              }}
+            >
+              <div>
+                <div style={{ fontWeight: '600', fontSize: '0.9rem' }}>Profile Defaults &amp; Database</div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--md-sys-color-outline)', marginTop: '0.15rem' }}>
+                  Per-material baselines for exported OrcaSlicer presets, and the SimplyPrint profile database
+                </div>
+              </div>
+              <ChevronRight size={18} style={{ flexShrink: 0, color: 'var(--md-sys-color-outline)' }} />
+            </button>
+          </div>
 
           {/* Google Gemini API Key */}
           <div style={{ borderTop: '1px solid var(--md-sys-color-outline-variant)', paddingTop: '1.25rem', marginTop: '1.5rem' }}>

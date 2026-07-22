@@ -281,26 +281,26 @@ export default function FilamentDefaultsSection({
           />
         </label>
 
-        {profileDbEnabled && (
-          <div style={{ ...CARD, marginTop: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
-            <div style={HINT}>
-              {profileDbStatus?.entryCount
-                ? <>{profileDbStatus.entryCount} filaments from {profileDbStatus.fileCount} presets<br />
-                    Synced {new Date(profileDbStatus.fetchedAt).toLocaleString()}</>
-                : 'Not indexed yet — sync to download the filament index.'}
-            </div>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={refresh}
-              disabled={refreshing}
-              style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexShrink: 0 }}
-            >
-              <RefreshCw size={14} style={refreshing ? { animation: 'spin 1s linear infinite' } : undefined} />
-              {refreshing ? 'Syncing…' : 'Sync now'}
-            </button>
+        {/* Always available -- syncing the index is independent of the toggle, so
+            you can download it without a save-and-reopen round trip. */}
+        <div style={{ ...CARD, marginTop: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
+          <div style={HINT}>
+            {profileDbStatus?.entryCount
+              ? <>{profileDbStatus.entryCount} filaments from {profileDbStatus.fileCount} presets<br />
+                  Synced {new Date(profileDbStatus.fetchedAt).toLocaleString()}</>
+              : 'Not indexed yet — sync to download the filament index.'}
           </div>
-        )}
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={refresh}
+            disabled={refreshing}
+            style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexShrink: 0 }}
+          >
+            <RefreshCw size={14} style={refreshing ? { animation: 'spin 1s linear infinite' } : undefined} />
+            {refreshing ? 'Syncing…' : 'Sync now'}
+          </button>
+        </div>
       </div>
     </>
   );

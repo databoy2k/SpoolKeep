@@ -1574,14 +1574,14 @@ app.get('/api/profile-db/status', async (_req, res) => {
   }
 });
 
+// Not gated on the enable toggle: this only ever runs when the user clicks
+// "Sync now", so requiring the setting to be saved first just forces a
+// save-and-reopen round trip. The toggle still gates automatic lookups.
 app.post('/api/profile-db/refresh', async (_req, res) => {
   try {
-    if (!(await profileDbEnabled())) {
-      return res.status(403).json({ error: 'Profile database is disabled in settings.' });
-    }
     const index = await profileDb.refreshIndex();
     logMsg('INFO', `Profile DB index refreshed: ${index.entries.length} filaments from ${index.fileCount} presets`);
-    res.json({ enabled: true, ...(await profileDb.status()) });
+    res.json({ enabled: await profileDbEnabled(), ...(await profileDb.status()) });
   } catch (error) {
     logMsg('ERROR', 'Failed to refresh profile DB index', error);
     res.status(502).json({ error: 'Could not reach the profile database.' });

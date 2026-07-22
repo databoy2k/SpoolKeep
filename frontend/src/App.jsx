@@ -28,6 +28,7 @@ import ModelDetailsModal from './components/ModelDetailsModal';
 import PrintFileCard from './components/PrintFileCard';
 import SpoolCard from './components/SpoolCard';
 import AddEditSpoolModal from './components/AddEditSpoolModal';
+import FilamentDefaultsPage from './components/FilamentDefaultsPage';
 
 export default function App() {
   // Theme State
@@ -57,11 +58,16 @@ export default function App() {
 
   const navigateTo = (page) => {
     if (page === currentPage) return;
-    slideDir.current = page === 'files' ? 'right' : 'left';
+    slideDir.current = page === 'spools' ? 'left' : 'right';
     setCurrentPage(page);
   };
+  // Pages reachable only from Settings, not from the nav tabs.
+  const isSubPage = currentPage === 'filament-defaults';
   useEffect(() => {
-    localStorage.setItem('spoolkeep-page', currentPage);
+    // Sub-pages are reached from Settings, so don't restore into one on reload.
+    if (currentPage === 'spools' || currentPage === 'files') {
+      localStorage.setItem('spoolkeep-page', currentPage);
+    }
   }, [currentPage]);
 
   // Print Files State
@@ -144,6 +150,7 @@ export default function App() {
   const [curatedFields, setCuratedFields] = useState([]);
   const [profileDbEnabled, setProfileDbEnabled] = useState(false);
   const [profileDbStatus, setProfileDbStatus] = useState(null);
+  const [savingFilamentDefaults, setSavingFilamentDefaults] = useState(false);
 
   // RFID data for pre-filling AddEditSpoolModal form
   const [rfidFormData, setRfidFormData] = useState(null);
@@ -618,6 +625,38 @@ export default function App() {
     }
   }
 
+  const handleSaveFilamentDefaults = async () => {
+    setSavingFilamentDefaults(true);
+    try {
+      const response = await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filamentBaselineOverrides, presetGlobals })
+      });
+      if (!response.ok) throw new Error('Save failed');
+      toast.success('Filament defaults saved.');
+    } catch {
+      toast.error('Failed to save filament defaults.');
+    } finally {
+      setSavingFilamentDefaults(false);
+    }
+  };
+
+  // The toggle persists on its own so the index can be synced without a
+  // save-and-reopen round trip.
+  const handleToggleProfileDb = async (enabled) => {
+    setProfileDbEnabled(enabled);
+    try {
+      await fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profileDbEnabled: enabled })
+      });
+    } catch {
+      toast.error('Failed to save that setting.');
+    }
+  };
+
   const handleRefreshProfileDb = async () => {
     try {
       const response = await fetch('/api/profile-db/refresh', { method: 'POST' });
@@ -646,10 +685,7 @@ export default function App() {
           defaultSpoolSort: sortBy,
           defaultFilesSort: fileSort,
           td1sEnabled,
-          spoolmanEnabled,
-          profileDbEnabled,
-          filamentBaselineOverrides,
-          presetGlobals
+          spoolmanEnabled
         })
       });
       const data = await response.json();
@@ -1297,12 +1333,13 @@ export default function App() {
               Read Tag
             </button>
           )}
-          {currentPage === 'spools' ? (
+          {currentPage === 'spools' && (
             <button className="btn btn-primary" onClick={handleOpenAddModal}>
               <Plus size={18} />
               Add Spool
             </button>
-          ) : (
+          )}
+          {currentPage === 'files' && (
             <button className="btn btn-primary" onClick={() => handleOpenUploadModal()}>
               <Plus size={18} />
               Add File
@@ -1312,7 +1349,24 @@ export default function App() {
       </header>
 
       <div key={currentPage} className={slideDir.current ? `page-slide-from-${slideDir.current}` : undefined}>
-        {currentPage === 'spools' ? (
+        {isSubPage ? (
+          <FilamentDefaultsPage
+            onBack={() => navigateTo('spools')}
+            onSave={handleSaveFilamentDefaults}
+            saving={savingFilamentDefaults}
+            baselines={filamentBaselines}
+            overrides={filamentBaselineOverrides}
+            setOverrides={setFilamentBaselineOverrides}
+            globals={presetGlobals}
+            setGlobals={setPresetGlobals}
+            curatedFields={curatedFields}
+            profileDbEnabled={profileDbEnabled}
+            setProfileDbEnabled={handleToggleProfileDb}
+            profileDbStatus={profileDbStatus}
+            onRefreshProfileDb={handleRefreshProfileDb}
+            onLoadProfileDbStatus={fetchProfileDbStatus}
+          />
+        ) : currentPage === 'spools' ? (
           <>
             {/* Filters & Controls */}
             <section className="controls-bar" style={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: '0.75rem' }}>
@@ -1715,17 +1769,10 @@ export default function App() {
         spoolmanEnabled={spoolmanEnabled}
         setSpoolmanEnabled={setSpoolmanEnabled}
         dataFolderSize={dataFolderSize}
-        filamentBaselines={filamentBaselines}
-        filamentBaselineOverrides={filamentBaselineOverrides}
-        setFilamentBaselineOverrides={setFilamentBaselineOverrides}
-        presetGlobals={presetGlobals}
-        setPresetGlobals={setPresetGlobals}
-        curatedFields={curatedFields}
-        profileDbEnabled={profileDbEnabled}
-        setProfileDbEnabled={setProfileDbEnabled}
-        profileDbStatus={profileDbStatus}
-        onRefreshProfileDb={handleRefreshProfileDb}
-        onLoadProfileDbStatus={fetchProfileDbStatus}
+        onOpenFilamentDefaults={() => {
+          setIsSettingsModalOpen(false);
+          navigateTo('filament-defaults');
+        }}
       />
 
       <ModelDetailsModal
