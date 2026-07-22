@@ -32,6 +32,26 @@ With a Google Gemini API key configured, use your device camera to photograph a 
 - Bulk-export all spools as a `.zip` of presets
 - Download a `.3mf` print file with embedded per-filament colour version presets already patched in, ready to slice
 
+Exported presets are built from a per-material baseline covering the full OrcaSlicer
+setting list — flow ratio, volumetric speed, retraction, fan curves, pressure advance,
+ramming, start/end G-code — not just temperatures and density. Extruder and bed
+temperatures always come from the spool record; everything else comes from the baseline.
+
+Edit the baselines under **Settings → Filament Profile Defaults**: a form for the
+settings people actually tune, and a raw-JSON pane for the rest. Changes apply to both
+the spool export and the colour-version export.
+
+### Profile Database Cross-Reference
+Optionally cross-reference your spools against the
+[SimplyPrint slicer-profiles-db](https://github.com/SimplyPrint/slicer-profiles-db) —
+roughly 1,300 distinct filaments from vendor-published OrcaSlicer profiles.
+
+Enable it under **Settings → Profile Database** and hit "Sync now". The Add/Edit Spool
+form then shows a badge on the OrcaSlicer logo: green when your baseline matches the
+published profile, amber when values differ (click for a field-by-field comparison),
+grey when the filament isn't in the database. Disabled by default; when off, SpoolKeep
+makes no outbound requests.
+
 ### Print File Library
 - Upload `.stl` and `.3mf` model files (up to 500 MB)
 - Automatic thumbnail extraction from `.3mf` archives (plate images)

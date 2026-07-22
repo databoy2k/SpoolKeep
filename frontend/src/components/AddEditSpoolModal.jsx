@@ -14,7 +14,8 @@ export default function AddEditSpoolModal({
   onOpenSettings,
   onSaveSuccess,
   rfidFormData,
-  td1sEnabled = false
+  td1sEnabled = false,
+  profileDbEnabled = false
 }) {
   // Form State
   const [formName, setFormName] = useState('');
@@ -41,6 +42,11 @@ export default function AddEditSpoolModal({
   const [formOpened, setFormOpened] = useState(false);
   const [formDateOpened, setFormDateOpened] = useState('');
   const [formNetWeight, setFormNetWeight] = useState('1000');
+
+  // SimplyPrint profile database cross-reference
+  const [profileMatch, setProfileMatch] = useState(null);
+  const [profileMatchLoading, setProfileMatchLoading] = useState(false);
+  const [showProfilePanel, setShowProfilePanel] = useState(false);
 
   // Show color popover state
   const [showColorPopover, setShowColorPopover] = useState(false);
@@ -203,6 +209,31 @@ export default function AddEditSpoolModal({
     fetchOfdbBrands();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, editingSpool]);
+
+  // Look the spool up in the SimplyPrint profile database. Debounced because it
+  // re-runs on every keystroke in the brand / name fields.
+  useEffect(() => {
+    if (!isOpen || !profileDbEnabled || !formBrand.trim() || !formName.trim()) {
+      setProfileMatch(null);
+      return undefined;
+    }
+    setProfileMatchLoading(true);
+    const timer = setTimeout(async () => {
+      try {
+        const params = new URLSearchParams({
+          brand: formBrand, name: formName, type: formType,
+          minTemp: formMinTemp, maxTemp: formMaxTemp, bedMaxTemp: formBedMaxTemp
+        });
+        const response = await fetch(`/api/profile-db/match?${params}`);
+        setProfileMatch(response.ok ? await response.json() : null);
+      } catch {
+        setProfileMatch(null);
+      } finally {
+        setProfileMatchLoading(false);
+      }
+    }, 600);
+    return () => clearTimeout(timer);
+  }, [isOpen, profileDbEnabled, formBrand, formName, formType, formMinTemp, formMaxTemp, formBedMaxTemp]);
 
   // Apply RFID pre-fill data when received from parent
   useEffect(() => {
@@ -1096,12 +1127,22 @@ export default function AddEditSpoolModal({
 
   if (!isOpen) return null;
 
+  const syncState = !profileMatch?.match
+    ? 'unmatched'
+    : (profileMatch.differences?.length ? 'differs' : 'synced');
+  const syncTitle = {
+    unmatched: 'No match in the SimplyPrint profile database',
+    differs: `Matches ${profileMatch?.match?.base} — ${profileMatch?.differences?.length} settings differ`,
+    synced: `In sync with ${profileMatch?.match?.base}`
+  }[syncState];
+
   return (
     <div className="modal-overlay">
       <div className="modal-content">
         <div className="modal-header">
           <h2>{editingSpool ? 'Edit Filament Spool' : 'Add Filament Spool'}</h2>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <div style={{ position: 'relative', display: 'flex' }}>
             <button
               type="button"
               style={{
@@ -1139,11 +1180,79 @@ export default function AddEditSpoolModal({
                 <path d="M39.69,14.551c.727,1.285-.728,3.495-3.249,4.937s-5.154,1.569-5.88.284.727-3.495,3.248-4.937,5.154-1.569,5.881-.284" fill="#fff" />
               </svg>
             </button>
+            {profileDbEnabled && (
+              <button
+                type="button"
+                className={`profile-sync-dot ${syncState}`}
+                onClick={() => setShowProfilePanel(!showProfilePanel)}
+                title={syncTitle}
+                style={{ padding: 0, cursor: 'pointer', opacity: profileMatchLoading ? 0.4 : 1 }}
+              />
+            )}
+            </div>
             <button type="button" className="modal-close" onClick={onClose}>
               <X size={20} />
             </button>
           </div>
         </div>
+
+        {profileDbEnabled && showProfilePanel && (
+          <div style={{ marginTop: '0.75rem', padding: '0.75rem', borderRadius: 'var(--md-shape-corner-medium)', border: '1px solid var(--md-sys-color-outline-variant)', backgroundColor: 'var(--md-sys-color-surface-container-high)' }}>
+            {!profileMatch?.match ? (
+              <div style={{ fontSize: '0.8rem', color: 'var(--md-sys-color-outline)' }}>
+                No profile in the SimplyPrint database matches this brand and name.
+                {profileMatch?.alternates?.length > 0 && (
+                  <> Closest: {profileMatch.alternates.slice(0, 3).map(a => a.base).join(', ')}.</>
+                )}
+              </div>
+            ) : (
+              <>
+                <div style={{ fontSize: '0.85rem', fontWeight: '600', marginBottom: '0.15rem' }}>
+                  {profileMatch.match.base}
+                </div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--md-sys-color-outline)', marginBottom: '0.5rem' }}>
+                  {profileMatch.match.variant ? `@${profileMatch.match.variant} · ` : ''}
+                  {profileMatch.match.printerVendor} · match score {profileMatch.match.score}
+                </div>
+
+                {profileMatch.differences?.length ? (
+                  <>
+                    <div style={{ maxHeight: '160px', overflowY: 'auto', marginBottom: '0.5rem' }}>
+                      <table style={{ width: '100%', fontSize: '0.72rem', borderCollapse: 'collapse' }}>
+                        <thead>
+                          <tr style={{ textAlign: 'left', color: 'var(--md-sys-color-outline)' }}>
+                            <th style={{ padding: '0.15rem 0.3rem' }}>Setting</th>
+                            <th style={{ padding: '0.15rem 0.3rem' }}>Database</th>
+                            <th style={{ padding: '0.15rem 0.3rem' }}>Yours</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {profileMatch.differences.map(d => (
+                            <tr key={d.key} style={{ borderTop: '1px solid var(--md-sys-color-outline-variant)' }}>
+                              <td style={{ padding: '0.15rem 0.3rem', fontFamily: 'monospace' }}>{d.key}</td>
+                              <td style={{ padding: '0.15rem 0.3rem' }}>{String(d.db?.[0] ?? d.db ?? '')}</td>
+                              <td style={{ padding: '0.15rem 0.3rem', color: 'var(--md-sys-color-outline)' }}>
+                                {d.current === null ? '—' : String(d.current?.[0] ?? d.current)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--md-sys-color-outline)' }}>
+                      These differences come from the material baseline, not this spool. Adjust them in
+                      Settings → Filament Profile Defaults for <strong>{formType}</strong>.
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ fontSize: '0.8rem', color: 'var(--md-sys-color-outline)' }}>
+                    Every setting the database carries already matches your baseline.
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
 
         {/* Scraping & Open Filament DB Autofills */}
         {!editingSpool && (

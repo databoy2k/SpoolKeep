@@ -1,5 +1,6 @@
 /* global __APP_VERSION__ */
 import { Settings, X, AlertCircle } from 'lucide-react';
+import FilamentDefaultsSection from './FilamentDefaultsSection';
 
 function fmtBytes(bytes) {
   if (!bytes) return '0 B';
@@ -31,7 +32,18 @@ export default function SettingsModal({
   setTd1sEnabled,
   spoolmanEnabled = true,
   setSpoolmanEnabled,
-  dataFolderSize = 0
+  dataFolderSize = 0,
+  filamentBaselines = {},
+  filamentBaselineOverrides = {},
+  setFilamentBaselineOverrides,
+  presetGlobals = {},
+  setPresetGlobals,
+  curatedFields = [],
+  profileDbEnabled = false,
+  setProfileDbEnabled,
+  profileDbStatus,
+  onRefreshProfileDb,
+  onLoadProfileDbStatus
 }) {
   if (!isOpen) return null;
 
@@ -48,7 +60,7 @@ export default function SettingsModal({
 
   return (
     <div className="modal-overlay">
-      <div className="modal-content" style={{ maxWidth: '480px' }}>
+      <div className="modal-content" style={{ maxWidth: '560px' }}>
         <div className="modal-header">
           <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <Settings size={20} />
@@ -162,6 +174,21 @@ export default function SettingsModal({
               />
             </label>
           </div>
+
+          {/* Filament Profile Defaults + SimplyPrint profile database */}
+          <FilamentDefaultsSection
+            baselines={filamentBaselines}
+            overrides={filamentBaselineOverrides}
+            setOverrides={setFilamentBaselineOverrides}
+            globals={presetGlobals}
+            setGlobals={setPresetGlobals}
+            curatedFields={curatedFields}
+            profileDbEnabled={profileDbEnabled}
+            setProfileDbEnabled={setProfileDbEnabled}
+            profileDbStatus={profileDbStatus}
+            onRefreshProfileDb={onRefreshProfileDb}
+            onLoadProfileDbStatus={onLoadProfileDbStatus}
+          />
 
           {/* Google Gemini API Key */}
           <div style={{ borderTop: '1px solid var(--md-sys-color-outline-variant)', paddingTop: '1.25rem', marginTop: '1.5rem' }}>

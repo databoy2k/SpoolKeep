@@ -11,7 +11,7 @@ FROM node:20-alpine
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --only=production --ignore-scripts
-COPY server.js spoolman-api.js ./
+COPY server.js spoolman-api.js orca-presets.js profile-db.js profile-baselines.json ./
 # Copy built frontend from Stage 1
 COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
 

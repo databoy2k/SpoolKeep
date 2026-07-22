@@ -8,6 +8,8 @@ const crypto = require('crypto');
 const multer = require('multer');
 const AdmZip = require('adm-zip');
 const spoolmanApi = require('./spoolman-api');
+const orcaPresets = require('./orca-presets');
+const profileDb = require('./profile-db');
 
 const app = express();
 const PORT = process.env.PORT || 5050;
@@ -530,6 +532,11 @@ app.get('/api/settings', async (_req, res) => {
       defaultFilesSort: settings.defaultFilesSort || 'dateAddedNewest',
       td1sEnabled: settings.td1sEnabled || false,
       spoolmanEnabled: settings.spoolmanEnabled !== false,
+      profileDbEnabled: settings.profileDbEnabled === true,
+      filamentBaselines: orcaPresets.loadBaselines().types,
+      filamentBaselineOverrides: settings.filamentBaselineOverrides || {},
+      presetGlobals: { ...orcaPresets.PRESET_GLOBALS, ...(settings.presetGlobals || {}) },
+      curatedFields: orcaPresets.CURATED_FIELDS,
       dataFolderSize: await getDataDirSize(path.join(__dirname, 'data'))
     });
   } catch (error) {
@@ -565,6 +572,18 @@ app.post('/api/settings', async (req, res) => {
     }
     if (req.body.td1sEnabled !== undefined) {
       settings.td1sEnabled = !!req.body.td1sEnabled;
+      await fs.writeJson(SETTINGS_FILE, settings);
+    }
+    if (req.body.filamentBaselineOverrides !== undefined) {
+      settings.filamentBaselineOverrides = req.body.filamentBaselineOverrides || {};
+      await fs.writeJson(SETTINGS_FILE, settings);
+    }
+    if (req.body.presetGlobals !== undefined) {
+      settings.presetGlobals = req.body.presetGlobals || {};
+      await fs.writeJson(SETTINGS_FILE, settings);
+    }
+    if (req.body.profileDbEnabled !== undefined) {
+      settings.profileDbEnabled = !!req.body.profileDbEnabled;
       await fs.writeJson(SETTINGS_FILE, settings);
     }
     if (req.body.spoolmanEnabled !== undefined) {
@@ -1414,6 +1433,16 @@ app.post('/api/print-files/:id/attach-3mf', upload.single('threeMfFile'), async 
   }
 });
 
+// Baseline + globals as configured in Settings > Filament Profile Defaults.
+// Both OrcaSlicer export paths build their presets from these.
+async function getPresetOptions() {
+  const settings = await fs.readJson(SETTINGS_FILE).catch(() => ({}));
+  return {
+    overrides: settings.filamentBaselineOverrides || {},
+    globals: settings.presetGlobals || {},
+  };
+}
+
 app.get('/api/print-files/:id/colour-versions/:cvId/orca-export', async (req, res) => {
   try {
     const filesDb = await fs.readJson(PRINT_FILES_FILE);
@@ -1423,31 +1452,25 @@ app.get('/api/print-files/:id/colour-versions/:cvId/orca-export', async (req, re
     if (!cv) return res.status(404).json({ error: 'Colour version not found.' });
     if (!cv.filaments?.length) return res.status(400).json({ error: 'Colour version has no filament assignments.' });
 
-    const TYPE_INHERITS = {
-      PLA: 'Generic PLA', PLAPLUS: 'Generic PLA+', 'PLA+': 'Generic PLA+',
-      PETG: 'Generic PETG', PETGCF: 'Generic PETG-CF', 'PETG-CF': 'Generic PETG-CF',
-      ABS: 'Generic ABS', ASA: 'Generic ASA',
-      TPU: 'Generic TPU', 'TPU95A': 'Generic TPU', 'TPU98A': 'Generic TPU',
-      PA: 'Generic PA', NYLON: 'Generic PA', 'PA-CF': 'Generic PA-CF', PACF: 'Generic PA-CF',
-      PC: 'Generic PC', PVA: 'Generic PVA', HIPS: 'Generic HIPS', PP: 'Generic PP',
-    };
-
+    const presetOptions = await getPresetOptions();
     const zip = new AdmZip();
     const slotLines = [];
 
     for (const fil of cv.filaments) {
-      const typeKey = (fil.type || 'PLA').toUpperCase().replace(/[\s+]/g, '');
-      const inherits = TYPE_INHERITS[typeKey] || `Generic ${fil.type || 'PLA'}`;
       const presetName = `SK ${fil.brand} ${fil.name}`.slice(0, 64);
-      const preset = {
-        name: presetName,
-        from: 'User',
-        is_custom_defined: '1',
-        inherits,
-        filament_colour: [fil.colorHex || '#FFFFFF'],
-        filament_type: [fil.type || 'PLA'],
-        filament_vendor: [fil.brand || 'Generic'],
-      };
+      const preset = orcaPresets.buildFilamentPreset({
+        brand: fil.brand,
+        name: fil.name,
+        type: fil.type,
+        colourHex: fil.colorHex,
+        minTemp: fil.minTemp,
+        maxTemp: fil.maxTemp,
+        bedMaxTemp: fil.bedMaxTemp,
+      }, presetOptions);
+      preset.name = presetName;
+      preset.filament_settings_id = [presetName];
+      preset.is_custom_defined = '1';
+
       const filename = presetName.replace(/[/\\:*?"<>|]/g, '_') + '.json';
       zip.addFile(filename, Buffer.from(JSON.stringify(preset, null, 2)));
       slotLines.push(`  Slot ${fil.slot}: ${fil.brand} ${fil.name} (${fil.type}) — ${fil.colorHex}`);
@@ -1485,6 +1508,115 @@ app.get('/api/print-files/:id/colour-versions/:cvId/orca-export', async (req, re
   } catch (error) {
     logMsg('ERROR', 'Error generating OrcaSlicer export', error);
     res.status(500).json({ error: 'Failed to generate OrcaSlicer export.' });
+  }
+});
+
+// Bulk OrcaSlicer preset export for spools. Optionally applies settings from a
+// confirmed SimplyPrint match per spool (dbPaths maps spool id -> profile path).
+app.post('/api/spools/orca-export', async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body.spoolIds) ? req.body.spoolIds : [];
+    if (!ids.length) return res.status(400).json({ error: 'No spools selected.' });
+
+    const spools = await fs.readJson(DB_FILE);
+    const selected = spools.filter(s => ids.includes(s.id));
+    if (!selected.length) return res.status(404).json({ error: 'No matching spools found.' });
+
+    const presetOptions = await getPresetOptions();
+    const dbPaths = req.body.dbPaths || {};
+    const zip = new AdmZip();
+
+    for (const spool of selected) {
+      let dbSettings;
+      if (dbPaths[spool.id]) {
+        try {
+          dbSettings = (await profileDb.fetchProfile(dbPaths[spool.id])).settings;
+        } catch (err) {
+          logMsg('WARNING', `Could not apply profile DB match for spool ${spool.id}`, err);
+        }
+      }
+      const preset = orcaPresets.buildFilamentPreset(spool, { ...presetOptions, dbSettings });
+      zip.addFile(orcaPresets.presetFileName(spool), Buffer.from(JSON.stringify(preset, null, 2)));
+    }
+
+    // Mark them exported in the same pass rather than making the client fan out
+    // a PUT per spool.
+    let touched = false;
+    for (const spool of spools) {
+      if (ids.includes(spool.id) && !spool.exportedToOrca) {
+        spool.exportedToOrca = true;
+        touched = true;
+      }
+    }
+    if (touched) await fs.writeJson(DB_FILE, spools);
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', 'attachment; filename="SpoolKeep_OrcaSlicer_Profiles.zip"');
+    res.send(zip.toBuffer());
+  } catch (error) {
+    logMsg('ERROR', 'Error generating OrcaSlicer spool export', error);
+    res.status(500).json({ error: 'Failed to generate OrcaSlicer profiles.' });
+  }
+});
+
+// 2.7 SimplyPrint profile database
+async function profileDbEnabled() {
+  const settings = await fs.readJson(SETTINGS_FILE).catch(() => ({}));
+  return settings.profileDbEnabled === true;
+}
+
+app.get('/api/profile-db/status', async (_req, res) => {
+  try {
+    const enabled = await profileDbEnabled();
+    res.json({ enabled, ...(await profileDb.status()) });
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to read profile DB status' });
+  }
+});
+
+app.post('/api/profile-db/refresh', async (_req, res) => {
+  try {
+    if (!(await profileDbEnabled())) {
+      return res.status(403).json({ error: 'Profile database is disabled in settings.' });
+    }
+    const index = await profileDb.refreshIndex();
+    logMsg('INFO', `Profile DB index refreshed: ${index.entries.length} filaments from ${index.fileCount} presets`);
+    res.json({ enabled: true, ...(await profileDb.status()) });
+  } catch (error) {
+    logMsg('ERROR', 'Failed to refresh profile DB index', error);
+    res.status(502).json({ error: 'Could not reach the profile database.' });
+  }
+});
+
+// Match a spool against the DB and diff the result against what we would export.
+app.get('/api/profile-db/match', async (req, res) => {
+  try {
+    if (!(await profileDbEnabled())) return res.json({ enabled: false, match: null });
+
+    const { brand, name, type } = req.query;
+    const result = await profileDb.match({ brand, name, type });
+    if (!result.match) {
+      return res.json({ enabled: true, match: null, alternates: result.alternates });
+    }
+
+    const profile = await profileDb.fetchProfile(result.match.path);
+    const presetOptions = await getPresetOptions();
+    const differences = orcaPresets.diffAgainstDb(
+      { brand, name, type, ...req.query },
+      profile.settings,
+      presetOptions
+    );
+
+    res.json({
+      enabled: true,
+      match: result.match,
+      alternates: result.alternates,
+      settings: profile.settings,
+      differences,
+    });
+  } catch (error) {
+    logMsg('ERROR', 'Profile DB match failed', error);
+    res.status(502).json({ error: 'Could not query the profile database.' });
   }
 });
 

@@ -1264,6 +1264,26 @@ select.form-input {
   transform: translateY(-2px);
 }
 
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Profile DB sync dot on the OrcaSlicer logo */
+.profile-sync-dot {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid var(--md-sys-color-surface-container-low);
+  box-sizing: content-box;
+}
+.profile-sync-dot.synced { background-color: #2e9e5b; }
+.profile-sync-dot.differs { background-color: #e0a11b; }
+.profile-sync-dot.unmatched { background-color: var(--md-sys-color-outline); }
+
 /* OrcaSlicer Exported Badge */
 .orca-exported-badge {
   display: inline-flex;

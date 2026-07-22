@@ -137,6 +137,14 @@ export default function App() {
   const [spoolmanEnabled, setSpoolmanEnabled] = useState(true);
   const [dataFolderSize, setDataFolderSize] = useState(0);
 
+  // Filament profile defaults + SimplyPrint profile database
+  const [filamentBaselines, setFilamentBaselines] = useState({});
+  const [filamentBaselineOverrides, setFilamentBaselineOverrides] = useState({});
+  const [presetGlobals, setPresetGlobals] = useState({});
+  const [curatedFields, setCuratedFields] = useState([]);
+  const [profileDbEnabled, setProfileDbEnabled] = useState(false);
+  const [profileDbStatus, setProfileDbStatus] = useState(null);
+
   // RFID data for pre-filling AddEditSpoolModal form
   const [rfidFormData, setRfidFormData] = useState(null);
 
@@ -591,10 +599,36 @@ export default function App() {
       setTd1sEnabled(data.td1sEnabled || false);
       setSpoolmanEnabled(data.spoolmanEnabled !== false);
       setDataFolderSize(data.dataFolderSize || 0);
+      setFilamentBaselines(data.filamentBaselines || {});
+      setFilamentBaselineOverrides(data.filamentBaselineOverrides || {});
+      setPresetGlobals(data.presetGlobals || {});
+      setCuratedFields(data.curatedFields || []);
+      setProfileDbEnabled(data.profileDbEnabled === true);
     } catch (error) {
       console.error('Failed to fetch settings:', error);
     }
   }
+
+  async function fetchProfileDbStatus() {
+    try {
+      const response = await fetch('/api/profile-db/status');
+      setProfileDbStatus(await response.json());
+    } catch (error) {
+      console.error('Failed to fetch profile DB status:', error);
+    }
+  }
+
+  const handleRefreshProfileDb = async () => {
+    try {
+      const response = await fetch('/api/profile-db/refresh', { method: 'POST' });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Refresh failed');
+      setProfileDbStatus(data);
+      toast.success(`Indexed ${data.entryCount} filaments.`);
+    } catch (error) {
+      toast.error(error.message || 'Could not reach the profile database.');
+    }
+  };
 
   const handleSaveSettings = async (e) => {
     e.preventDefault();
@@ -607,7 +641,16 @@ export default function App() {
       const response = await fetch('/api/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ geminiApiKey, defaultSpoolSort: sortBy, defaultFilesSort: fileSort, td1sEnabled, spoolmanEnabled })
+        body: JSON.stringify({
+          geminiApiKey,
+          defaultSpoolSort: sortBy,
+          defaultFilesSort: fileSort,
+          td1sEnabled,
+          spoolmanEnabled,
+          profileDbEnabled,
+          filamentBaselineOverrides,
+          presetGlobals
+        })
       });
       const data = await response.json();
       if (response.ok) {
@@ -988,61 +1031,23 @@ export default function App() {
     }
   };
 
+  // Presets are built server-side from the shared baseline table so that this
+  // export and the colour-version export stay in sync. See orca-presets.js.
   const exportOrcaSlicerPresets = async (spoolsToExport) => {
     if (spoolsToExport.length === 0) return;
 
-    const zip = new JSZip();
-    spoolsToExport.forEach(spool => {
-      const cleanName = spool.name.replace(/[^a-zA-Z0-9_-]/g, '_');
-      const baseType = spool.type.toUpperCase().replace(/\+/g, '');
-      let inheritsParent = 'Generic PLA';
-      if (baseType.includes('PETG')) inheritsParent = 'Generic PETG';
-      else if (baseType.includes('ABS')) inheritsParent = 'Generic ABS';
-      else if (baseType.includes('ASA')) inheritsParent = 'Generic ASA';
-      else if (baseType.includes('TPU')) inheritsParent = 'Generic TPU';
-      else if (baseType.includes('NYLON') || baseType.includes('PA')) inheritsParent = 'Generic PA';
-      else if (baseType.includes('PC')) inheritsParent = 'Generic PC';
-
-      let density = '1.24';
-      if (baseType.includes('PETG')) density = '1.27';
-      else if (baseType.includes('ABS')) density = '1.04';
-      else if (baseType.includes('ASA')) density = '1.07';
-      else if (baseType.includes('TPU')) density = '1.20';
-      else if (baseType.includes('NYLON') || baseType.includes('PA')) density = '1.14';
-      else if (baseType.includes('PC')) density = '1.20';
-
-      const minTempNum = Number(spool.minTemp) || 190;
-      const maxTempNum = Number(spool.maxTemp) || 220;
-      const avgTempNum = Math.round((minTempNum + maxTempNum) / 2);
-      const bedMaxTempNum = Number(spool.bedMaxTemp) || 60;
-
-      const preset = {
-        name: `${spool.brand} ${spool.name}`,
-        from: 'User',
-        inherits: inheritsParent,
-        is_custom_defined: '0',
-        version: '2.2.43.2',
-        filament_settings_id: [`${spool.brand} ${spool.name}`],
-        filament_vendor: [spool.brand],
-        filament_type: [spool.type],
-        default_filament_colour: [spool.colourHex || spool.colorHex],
-        nozzle_temperature_range_low: [String(minTempNum)],
-        nozzle_temperature_range_high: [String(maxTempNum)],
-        nozzle_temperature: [String(avgTempNum)],
-        nozzle_temperature_initial_layer: [String(avgTempNum)],
-        hot_plate_temp: [String(bedMaxTempNum)],
-        hot_plate_temp_initial_layer: [String(bedMaxTempNum)],
-        textured_plate_temp: [String(bedMaxTempNum)],
-        textured_plate_temp_initial_layer: [String(bedMaxTempNum)],
-        filament_density: [density]
-      };
-
-      const filename = `${spool.brand.toLowerCase()}_${cleanName.toLowerCase()}.json`;
-      zip.file(filename, JSON.stringify(preset, null, 2));
-    });
-
     try {
-      const content = await zip.generateAsync({ type: 'blob' });
+      const response = await fetch('/api/spools/orca-export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ spoolIds: spoolsToExport.map(s => s.id) })
+      });
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.error || 'Export failed');
+      }
+
+      const content = await response.blob();
       const url = window.URL.createObjectURL(content);
       const link = document.createElement('a');
       link.href = url;
@@ -1053,17 +1058,6 @@ export default function App() {
       window.URL.revokeObjectURL(url);
 
       confetti({ particleCount: 50, spread: 30, colors: ['#337150', '#ffffff'] });
-
-      // Update database status for exported spools
-      await Promise.all(spoolsToExport.map(async (spool) => {
-        if (!spool.exportedToOrca) {
-          await fetch(`/api/spools/${spool.id}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ exportedToOrca: true })
-          });
-        }
-      }));
 
       fetchSpools();
     } catch (e) {
@@ -1650,6 +1644,7 @@ export default function App() {
         editingSpool={editingSpool}
         rfidFormData={rfidFormData}
         td1sEnabled={td1sEnabled}
+        profileDbEnabled={profileDbEnabled}
         onOpenSettings={() => setIsSettingsModalOpen(true)}
         onSaveSuccess={(savedSpool, shouldPromptRfid) => {
           fetchSpools();
@@ -1720,6 +1715,17 @@ export default function App() {
         spoolmanEnabled={spoolmanEnabled}
         setSpoolmanEnabled={setSpoolmanEnabled}
         dataFolderSize={dataFolderSize}
+        filamentBaselines={filamentBaselines}
+        filamentBaselineOverrides={filamentBaselineOverrides}
+        setFilamentBaselineOverrides={setFilamentBaselineOverrides}
+        presetGlobals={presetGlobals}
+        setPresetGlobals={setPresetGlobals}
+        curatedFields={curatedFields}
+        profileDbEnabled={profileDbEnabled}
+        setProfileDbEnabled={setProfileDbEnabled}
+        profileDbStatus={profileDbStatus}
+        onRefreshProfileDb={handleRefreshProfileDb}
+        onLoadProfileDbStatus={fetchProfileDbStatus}
       />
 
       <ModelDetailsModal
