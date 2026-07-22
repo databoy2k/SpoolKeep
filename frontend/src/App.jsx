@@ -145,6 +145,7 @@ export default function App() {
 
   // Filament profile defaults + SimplyPrint profile database
   const [filamentBaselines, setFilamentBaselines] = useState({});
+  const [filamentTypesInUse, setFilamentTypesInUse] = useState([]);
   const [filamentBaselineOverrides, setFilamentBaselineOverrides] = useState({});
   const [presetGlobals, setPresetGlobals] = useState({});
   const [curatedFields, setCuratedFields] = useState([]);
@@ -607,6 +608,7 @@ export default function App() {
       setSpoolmanEnabled(data.spoolmanEnabled !== false);
       setDataFolderSize(data.dataFolderSize || 0);
       setFilamentBaselines(data.filamentBaselines || {});
+      setFilamentTypesInUse(data.filamentTypesInUse || []);
       setFilamentBaselineOverrides(data.filamentBaselineOverrides || {});
       setPresetGlobals(data.presetGlobals || {});
       setCuratedFields(data.curatedFields || []);
@@ -1355,6 +1357,7 @@ export default function App() {
             onSave={handleSaveFilamentDefaults}
             saving={savingFilamentDefaults}
             baselines={filamentBaselines}
+            typesInUse={filamentTypesInUse}
             overrides={filamentBaselineOverrides}
             setOverrides={setFilamentBaselineOverrides}
             globals={presetGlobals}
@@ -1771,6 +1774,8 @@ export default function App() {
         dataFolderSize={dataFolderSize}
         onOpenFilamentDefaults={() => {
           setIsSettingsModalOpen(false);
+          // Re-read so the material list reflects spools added this session.
+          fetchSettings();
           navigateTo('filament-defaults');
         }}
       />

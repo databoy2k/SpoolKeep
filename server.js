@@ -504,6 +504,19 @@ app.post('/api/scrape', async (req, res) => {
   }
 });
 
+// Which baseline materials are worth showing on the filament defaults page:
+// the ones the inventory actually uses, mapped through the same type aliases the
+// exporter uses, plus any that already carry an override so a stale one can
+// still be found and reset.
+async function getFilamentTypesInUse(settings) {
+  const spools = await fs.readJson(DB_FILE).catch(() => []);
+  const inUse = new Set(spools.map(s => orcaPresets.resolveType(s.type)));
+  for (const type of Object.keys(settings.filamentBaselineOverrides || {})) {
+    inUse.add(type);
+  }
+  return [...inUse].sort();
+}
+
 // 2.5 Settings, Web Search, and Photo OCR APIs
 app.get('/api/settings', async (_req, res) => {
   try {
@@ -533,6 +546,7 @@ app.get('/api/settings', async (_req, res) => {
       td1sEnabled: settings.td1sEnabled || false,
       spoolmanEnabled: settings.spoolmanEnabled !== false,
       profileDbEnabled: settings.profileDbEnabled === true,
+      filamentTypesInUse: await getFilamentTypesInUse(settings),
       filamentBaselines: orcaPresets.loadBaselines().types,
       filamentBaselineOverrides: settings.filamentBaselineOverrides || {},
       presetGlobals: { ...orcaPresets.PRESET_GLOBALS, ...(settings.presetGlobals || {}) },

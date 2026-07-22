@@ -22,6 +22,7 @@ const isNil = (value) => value === 'nil' || value === '' || value === undefined 
 
 export default function FilamentDefaultsSection({
   baselines = {},
+  typesInUse = [],
   overrides = {},
   setOverrides,
   globals = {},
@@ -33,15 +34,23 @@ export default function FilamentDefaultsSection({
   onRefreshProfileDb,
   onLoadProfileDbStatus
 }) {
-  const types = useMemo(() => Object.keys(baselines).sort(), [baselines]);
+  // Only materials the inventory actually uses. No point offering an ABS
+  // baseline to someone who owns no ABS.
+  const types = useMemo(
+    () => typesInUse.filter(t => baselines[t]).sort(),
+    [baselines, typesInUse]
+  );
   const [activeType, setActiveType] = useState('');
   const [showRaw, setShowRaw] = useState(false);
   const [rawDraft, setRawDraft] = useState('');
   const [rawError, setRawError] = useState('');
   const [refreshing, setRefreshing] = useState(false);
 
+  // Also re-picks when the current selection drops out of the list, e.g. after
+  // the last spool of that material is deleted.
   useEffect(() => {
-    if (!activeType && types.length) setActiveType(types.includes('PLA') ? 'PLA' : types[0]);
+    if (!types.length) return;
+    if (!types.includes(activeType)) setActiveType(types.includes('PLA') ? 'PLA' : types[0]);
   }, [types, activeType]);
 
   useEffect(() => {
@@ -128,8 +137,16 @@ export default function FilamentDefaultsSection({
         <p style={{ ...HINT, marginBottom: '0.75rem' }}>
           Baseline settings written into every exported OrcaSlicer preset. Extruder and bed
           temperatures are not listed here — those always come from the spool.
+          Only materials in your inventory are listed.
         </p>
 
+        {!types.length && (
+          <div style={{ ...CARD, ...HINT }}>
+            No materials to configure yet — add a spool and its material will appear here.
+          </div>
+        )}
+
+        {types.length > 0 && (
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'flex-end', marginBottom: '0.75rem' }}>
           <div className="form-group" style={{ flex: 1, marginBottom: 0 }}>
             <label className="form-label">Material</label>
@@ -152,6 +169,7 @@ export default function FilamentDefaultsSection({
             <RotateCcw size={14} /> Reset
           </button>
         </div>
+        )}
 
         {base && (
           <div style={{ ...HINT, marginBottom: '0.75rem', display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
@@ -212,6 +230,7 @@ export default function FilamentDefaultsSection({
           </div>
         ))}
 
+        {base && (
         <button
           type="button"
           onClick={() => setShowRaw(!showRaw)}
@@ -220,8 +239,9 @@ export default function FilamentDefaultsSection({
           {showRaw ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
           All {Object.keys(effective).length} settings (raw JSON)
         </button>
+        )}
 
-        {showRaw && (
+        {base && showRaw && (
           <div style={{ marginTop: '0.5rem' }}>
             <textarea
               className="form-input"
