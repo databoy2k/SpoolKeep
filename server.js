@@ -8,6 +8,7 @@ const crypto = require('crypto');
 const multer = require('multer');
 const AdmZip = require('adm-zip');
 const spoolmanApi = require('./spoolman-api');
+const printerLink = require('./printer-link');
 const orcaPresets = require('./orca-presets');
 const profileDb = require('./profile-db');
 
@@ -104,18 +105,22 @@ async function initDb() {
     await fs.writeJson(SETTINGS_FILE, { geminiApiKey: '' });
   }
 
-  // Cache the Spoolman API toggle (default enabled)
+  // Cache the Spoolman API toggle (default enabled) and printer URL
   try {
     const settings = await fs.readJson(SETTINGS_FILE);
     spoolmanEnabled = settings.spoolmanEnabled !== false;
+    printerUrl = settings.printerUrl || '';
   } catch {
     spoolmanEnabled = true;
+    printerUrl = '';
   }
 }
 
 // Whether the Spoolman-compatible API (/api/v1/*) is enabled; kept in sync
 // with the spoolmanEnabled setting so the toggle takes effect without restart.
 let spoolmanEnabled = true;
+// Base URL of the connected printer's Moonraker (for automatic spool linking).
+let printerUrl = '';
 
 // Encryption/Decryption Helpers for secure settings storage
 function encryptKey(text) {
@@ -476,6 +481,14 @@ spoolmanApi.registerSpoolmanApi(app, {
   isEnabled: () => spoolmanEnabled
 });
 
+// Automatic spool linking against a connected printer's Moonraker/SpoolLink.
+printerLink.registerPrinterLinkApi(app, {
+  dbFile: DB_FILE,
+  logMsg,
+  axios,
+  getPrinterUrl: () => printerUrl
+});
+
 // 2. Web Scraper
 app.post('/api/scrape', async (req, res) => {
   const { url } = req.body;
@@ -545,6 +558,7 @@ app.get('/api/settings', async (_req, res) => {
       defaultFilesSort: settings.defaultFilesSort || 'dateAddedNewest',
       td1sEnabled: settings.td1sEnabled || false,
       spoolmanEnabled: settings.spoolmanEnabled !== false,
+      printerUrl: settings.printerUrl || '',
       profileDbEnabled: settings.profileDbEnabled === true,
       filamentTypesInUse: await getFilamentTypesInUse(settings),
       filamentBaselines: orcaPresets.loadBaselines().types,
@@ -612,6 +626,11 @@ app.post('/api/settings', async (req, res) => {
         logMsg('INFO', 'Spoolman API enabled via settings');
       }
     }
+    if (req.body.printerUrl !== undefined) {
+      settings.printerUrl = String(req.body.printerUrl || '').trim();
+      await fs.writeJson(SETTINGS_FILE, settings);
+      printerUrl = settings.printerUrl;
+    }
 
     const decryptedKey = decryptKey(settings.geminiApiKey);
     const activeKey = envKey || decryptedKey;
@@ -629,7 +648,8 @@ app.post('/api/settings', async (req, res) => {
       defaultSpoolSort: settings.defaultSpoolSort || 'colour',
       defaultFilesSort: settings.defaultFilesSort || 'dateAddedNewest',
       td1sEnabled: settings.td1sEnabled || false,
-      spoolmanEnabled: settings.spoolmanEnabled !== false
+      spoolmanEnabled: settings.spoolmanEnabled !== false,
+      printerUrl: settings.printerUrl || ''
     });
   } catch (error) {
     res.status(500).json({ error: 'Failed to save settings' });

@@ -18,6 +18,7 @@ window.JSZip = JSZip;
 // Import utility functions and components
 import { getColorNameFromHex, getColourFamily } from './utils/colorUtils';
 import SettingsModal from './components/SettingsModal';
+import LinkPrinterModal from './components/LinkPrinterModal';
 import RfidWriterModal from './components/RfidWriterModal';
 import RfidReaderModal from './components/RfidReaderModal';
 import Model3DViewer from './components/Model3DViewer';
@@ -141,6 +142,8 @@ export default function App() {
   const [isNfcSupported, setIsNfcSupported] = useState(false);
   const [td1sEnabled, setTd1sEnabled] = useState(false);
   const [spoolmanEnabled, setSpoolmanEnabled] = useState(true);
+  const [printerUrl, setPrinterUrl] = useState('');
+  const [isLinkPrinterModalOpen, setIsLinkPrinterModalOpen] = useState(false);
   const [dataFolderSize, setDataFolderSize] = useState(0);
 
   // Filament profile defaults + SimplyPrint profile database
@@ -606,6 +609,7 @@ export default function App() {
       if (data.defaultFilesSort) setFileSort(data.defaultFilesSort);
       setTd1sEnabled(data.td1sEnabled || false);
       setSpoolmanEnabled(data.spoolmanEnabled !== false);
+      setPrinterUrl(data.printerUrl || '');
       setDataFolderSize(data.dataFolderSize || 0);
       setFilamentBaselines(data.filamentBaselines || {});
       setFilamentTypesInUse(data.filamentTypesInUse || []);
@@ -687,7 +691,8 @@ export default function App() {
           defaultSpoolSort: sortBy,
           defaultFilesSort: fileSort,
           td1sEnabled,
-          spoolmanEnabled
+          spoolmanEnabled,
+          printerUrl
         })
       });
       const data = await response.json();
@@ -1771,6 +1776,9 @@ export default function App() {
         setTd1sEnabled={setTd1sEnabled}
         spoolmanEnabled={spoolmanEnabled}
         setSpoolmanEnabled={setSpoolmanEnabled}
+        printerUrl={printerUrl}
+        setPrinterUrl={setPrinterUrl}
+        onLinkPrinter={() => { setIsSettingsModalOpen(false); setIsLinkPrinterModalOpen(true); }}
         dataFolderSize={dataFolderSize}
         onOpenFilamentDefaults={() => {
           setIsSettingsModalOpen(false);
@@ -1778,6 +1786,12 @@ export default function App() {
           fetchSettings();
           navigateTo('filament-defaults');
         }}
+      />
+
+      <LinkPrinterModal
+        isOpen={isLinkPrinterModalOpen}
+        onClose={() => setIsLinkPrinterModalOpen(false)}
+        onLinked={() => fetchSpools()}
       />
 
       <ModelDetailsModal

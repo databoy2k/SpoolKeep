@@ -1269,6 +1269,8 @@ select.form-input {
   to { transform: rotate(360deg); }
 }
 
+.spin { animation: spin 1s linear infinite; }
+
 /* Profile DB sync dot on the OrcaSlicer logo */
 .profile-sync-dot {
   position: absolute;

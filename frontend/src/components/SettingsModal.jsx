@@ -1,5 +1,5 @@
 /* global __APP_VERSION__ */
-import { Settings, X, AlertCircle, ChevronRight } from 'lucide-react';
+import { Settings, X, AlertCircle, ChevronRight, Link2 } from 'lucide-react';
 
 function fmtBytes(bytes) {
   if (!bytes) return '0 B';
@@ -31,6 +31,9 @@ export default function SettingsModal({
   setTd1sEnabled,
   spoolmanEnabled = true,
   setSpoolmanEnabled,
+  printerUrl = '',
+  setPrinterUrl,
+  onLinkPrinter,
   dataFolderSize = 0,
   onOpenFilamentDefaults
 }) {
@@ -162,6 +165,39 @@ export default function SettingsModal({
                 style={{ width: '18px', height: '18px', accentColor: 'var(--md-sys-color-primary)', flexShrink: 0, marginLeft: '1rem' }}
               />
             </label>
+
+            {/* Printer link: read the printer's RFID cards and bind them to spools */}
+            {spoolmanEnabled !== false && (
+              <div style={{ padding: '0.75rem', borderRadius: 'var(--md-shape-corner-medium)', border: '1px solid var(--md-sys-color-outline-variant)', backgroundColor: 'var(--md-sys-color-surface-container-high)', marginTop: '0.5rem' }}>
+                <div style={{ fontWeight: '600', fontSize: '0.9rem' }}>Printer Auto-Link</div>
+                <div style={{ fontSize: '0.75rem', color: 'var(--md-sys-color-outline)', marginTop: '0.15rem', marginBottom: '0.5rem' }}>
+                  Moonraker URL of the printer. SpoolKeep reads its loaded RFID spools and binds them to your inventory.
+                </div>
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="http://10.0.1.51:7125"
+                  value={printerUrl || ''}
+                  onChange={(e) => setPrinterUrl(e.target.value)}
+                  style={{ fontFamily: 'monospace', fontSize: '0.8rem' }}
+                />
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={onLinkPrinter}
+                  disabled={!printerUrl}
+                  style={{ marginTop: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem' }}
+                  title={printerUrl ? 'Read the printer and link its loaded spools' : 'Enter and save the printer URL first'}
+                >
+                  <Link2 size={14} /> Link printer spools…
+                </button>
+                {!!printerUrl && (
+                  <div style={{ fontSize: '0.7rem', color: 'var(--md-sys-color-outline)', marginTop: '0.35rem', fontStyle: 'italic' }}>
+                    Save settings first if you just changed the URL.
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Filament profile defaults live on their own page -- the baseline
