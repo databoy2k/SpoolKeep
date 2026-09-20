@@ -486,7 +486,10 @@ printerLink.registerPrinterLinkApi(app, {
   dbFile: DB_FILE,
   logMsg,
   axios,
-  getPrinterUrl: () => printerUrl
+  getPrinterUrl: () => printerUrl,
+  // Linking stores the lane's RFID card UID on the spool; tell any connected
+  // Spoolman client (the printer) about the change.
+  onSpoolUpdated: (spool) => spoolmanApi.broadcastSpoolEvent('updated', spool)
 });
 
 // 2. Web Scraper

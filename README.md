@@ -80,6 +80,23 @@ SpoolKeep exposes a Spoolman-compatible API (`/api/v1/*`, including the spool ev
 3. Assign a spool to a lane with `SET_SPOOL_ID LANE=E0 SPOOL_ID=<n>` — spool numbers are shown by the API (`GET /api/v1/spool`).
 4. While printing, filament usage is reported back every few seconds and SpoolKeep updates the spool's used percentage automatically (set each spool's *Spool Filament Weight* for accurate tracking on non-1kg spools).
 
+#### Printer Auto-Link
+Instead of running `SET_SPOOL_ID` per lane (or picking spools by hand on the firmware's
+own filament page), set the printer's Moonraker URL under **Settings → Printer Auto-Link**
+and hit **Link printer spools**.
+
+SpoolKeep reads every loaded lane — RFID card UID plus the vendor, material and colour the
+printer is actually using — and proposes an inventory match for each one:
+
+- a card UID already known to a spool is an exact match and is preselected,
+- otherwise lanes are matched on brand, material and colour distance,
+- lanes the printer has already bound correctly are marked *already linked* and left alone,
+- lanes whose filament was set by hand (no usable RFID data) still match, because the
+  printer's own per-lane values are used, not just the tag.
+
+Confirm the matches and hit Link. Each newly linked card UID is stored on the SpoolKeep
+spool, so the same tag resolves instantly the next time it is loaded — in any lane.
+
 ### TD1s Spectrometer
 Optional integration with the TD1s colorimeter for hardware colour measurement. When enabled (Settings → Hardware Integrations), a connection badge appears beside the Filament Colour field on the Add/Edit Spool form. Connect via USB HID, USB Serial, or Web MIDI and tap the device to capture the measured hex value directly.
 
