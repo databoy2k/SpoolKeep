@@ -80,6 +80,23 @@ SpoolKeep exposes a Spoolman-compatible API (`/api/v1/*`, including the spool ev
 3. Assign a spool to a lane with `SET_SPOOL_ID LANE=E0 SPOOL_ID=<n>` — spool numbers are shown by the API (`GET /api/v1/spool`).
 4. While printing, filament usage is reported back every few seconds and SpoolKeep updates the spool's used percentage automatically (set each spool's *Spool Filament Weight* for accurate tracking on non-1kg spools).
 
+#### Printer Page
+The **Printer** tab (beside Spools and Print Files) is SpoolKeep's own view of the machine —
+the same job as the extended firmware's `/filament` page, without leaving SpoolKeep. Set the
+printer's Moonraker address at the top of the page (or in Settings) and it shows all four
+lanes, refreshing every few seconds:
+
+- the filament the printer is using, its colour swatches, card UID and tag type,
+- which SpoolKeep spool the lane is bound to, with remaining percentage,
+- a *mismatch* badge when the RFID tag and the printer's current settings disagree,
+- the suggested inventory match when the lane is bound to something else (or nothing).
+
+Per lane you can link or change the spool (picker opens on the best match), unlink, re-read
+the RFID tag, clear the lane, or override its filament by hand. Every action is sent by the
+SpoolKeep server over Moonraker — `SET_SPOOL_ID`, `FILAMENT_DT_CLEAR` / `FILAMENT_DT_UPDATE`
+and `SET_PRINT_FILAMENT_CONFIG`, exactly as the firmware's own page sends them — so the page
+works from any device that can reach SpoolKeep, whether or not it can reach the printer.
+
 #### Printer Auto-Link
 Instead of running `SET_SPOOL_ID` per lane (or picking spools by hand on the firmware's
 own filament page), set the printer's Moonraker URL under **Settings → Printer Auto-Link**

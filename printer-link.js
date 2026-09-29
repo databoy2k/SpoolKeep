@@ -144,34 +144,153 @@ function readLane(idx, fd, ptc) {
   const cardUid = uidToHex(fd.CARD_UID);
   const rfidVendor = clean(fd.VENDOR);
   const rfidMaterial = clean(fd.MAIN_TYPE);
+  const rfidSubType = clean(fd.SUB_TYPE) === 'Basic' ? '' : clean(fd.SUB_TYPE);
   // A bare or unprogrammed tag reports sentinel values (white colour, zeroed
   // temps), so only trust its colour when it carries real filament metadata.
   const rfidHasData = !!(rfidVendor || rfidMaterial);
   const rfidColour = rfidHasData ? intToHexColour(fd.RGB_1) : '';
+  const tagStatus = clean(fd.TAG_STATUS);
 
   // print_task_config is the printer's working copy: populated for RFID lanes
   // and for lanes the user configured by hand.
   const ptcVendor = clean(at(ptc.filament_vendor));
   const ptcMaterial = clean(at(ptc.filament_type));
+  const ptcSubType = clean(at(ptc.filament_sub_type));
   const multi = at(ptc.filament_color_multi);
-  const ptcColour = (multi && multi.nums > 0 && Array.isArray(multi.colors) && multi.colors[0])
-    ? String(multi.colors[0]).toUpperCase()
-    : String(at(ptc.filament_color_rgba) || '').slice(0, 6).toUpperCase();
+  const rgba = String(at(ptc.filament_color_rgba) || '').toUpperCase();
+  const ptcColours = (multi && multi.nums > 0 && Array.isArray(multi.colors))
+    ? multi.colors.slice(0, multi.nums).filter(Boolean).map(c => String(c).toUpperCase())
+    : (rgba.length >= 6 ? [rgba.slice(0, 6)] : []);
+  const ptcColour = ptcColours[0] || '';
+  const alpha = (multi && multi.alpha !== undefined)
+    ? multi.alpha
+    : (rgba.length >= 8 ? parseInt(rgba.slice(6, 8), 16) : 255);
 
   const spoolIdRaw = parseInt(at(ptc.filament_spool_id), 10);
+  const official = !!at(ptc.filament_official);
+  const filamentPresent = !!at(ptc.filament_exist);
+
+  // The tag and the printer's working copy can disagree — e.g. the lane was
+  // overridden by hand after the tag was read.
+  const differs = (a, b) => !!(a && b && a.toLowerCase() !== b.toLowerCase());
+  const mismatch = rfidHasData && (
+    differs(rfidMaterial, ptcMaterial) ||
+    differs(rfidVendor, ptcVendor) ||
+    differs(rfidSubType, ptcSubType) ||
+    !!(rfidColour && ptcColour && rfidColour !== ptcColour)
+  );
 
   return {
     lane: `E${idx}`,
+    channel: idx,
     extruder: idx + 1,
     cardUid,
     cardType: fd.CARD_TYPE || '',
+    // Tag present but carrying no filament data (blank or unreadable tag)
+    tagEmpty: !!cardUid && !rfidHasData && tagStatus !== 'error',
+    tagMalformed: !!cardUid && !rfidHasData && tagStatus === 'error',
+    // Merged "what is in this lane" view, used for matching and display
     vendor: ptcVendor || rfidVendor,
     material: ptcMaterial || rfidMaterial,
+    subType: ptcSubType || rfidSubType,
     colorHex: ptcColour || rfidColour,
-    official: !!at(ptc.filament_official),
-    filamentPresent: !!at(ptc.filament_exist),
+    colours: ptcColours.length ? ptcColours : (rfidColour ? [rfidColour] : []),
+    alpha,
+    official,
+    filamentPresent,
+    mismatch,
+    // The two sources kept apart, so the UI can show what disagrees
+    rfid: cardUid ? {
+      vendor: rfidVendor,
+      material: rfidMaterial,
+      subType: rfidSubType,
+      colorHex: rfidColour,
+      minTemp: rfidHasData ? (fd.HOTEND_MIN_TEMP || null) : null,
+      maxTemp: rfidHasData ? (fd.HOTEND_MAX_TEMP || null) : null,
+      bedTemp: rfidHasData ? (fd.BED_TEMP || null) : null
+    } : null,
+    printer: {
+      vendor: ptcVendor,
+      material: ptcMaterial,
+      subType: ptcSubType,
+      colorHex: ptcColour,
+      colours: ptcColours
+    },
     currentSpoolId: Number.isFinite(spoolIdRaw) && spoolIdRaw > 0 ? spoolIdRaw : 0
   };
+}
+
+// Build the full per-lane view: printer read + inventory match + the spool the
+// printer is currently bound to.
+function buildLanes(info, ptc, spools, { includeEmpty = false } = {}) {
+  const lanes = [];
+  info.forEach((entry, idx) => {
+    if (!entry || typeof entry !== 'object') return;
+    const read = readLane(idx, entry, ptc);
+    const isEmpty = !read.cardUid && !read.vendor && !read.material && !read.filamentPresent;
+    if (isEmpty && !includeEmpty) return;
+    const { suggestion, matchedBy, candidates } = matchSpools(spools, read);
+    const linked = spools.find(s => s.spoolmanId === read.currentSpoolId) || null;
+    lanes.push({
+      ...read,
+      empty: isEmpty,
+      currentSpool: linked
+        ? {
+          spoolmanId: linked.spoolmanId,
+          id: linked.id,
+          name: linked.name,
+          brand: linked.brand,
+          type: linked.type,
+          colourHex: linked.colourHex || linked.colorHex,
+          usedPercentage: linked.usedPercentage,
+          netWeight: linked.netWeight
+        }
+        : null,
+      // The printer already points at the spool we would pick: nothing to do.
+      alreadyLinked: read.currentSpoolId > 0 && read.currentSpoolId === suggestion,
+      suggestedSpoolId: suggestion,
+      matchedBy,
+      candidates
+    });
+  });
+  return lanes;
+}
+
+// Values are interpolated into a G-code line, so anything that could start a
+// new command or break out of a quoted argument has to go.
+function gcodeSafe(value, max = 40) {
+  return String(value || '')
+    .replace(/["\r\n;]/g, '')
+    .trim()
+    .slice(0, max);
+}
+
+function hexColour(value) {
+  const s = String(value || '').replace('#', '').toUpperCase();
+  return /^[0-9A-F]{6}$/.test(s) ? s : null;
+}
+
+async function sendGcode(script) {
+  const base = printerUrl();
+  if (!base) throw new Error('No printer URL configured');
+  const resp = await deps.axios.get(
+    `${base}/printer/gcode/script`,
+    { params: { script }, timeout: 15000 });
+  if (resp.data?.result !== 'ok') throw new Error('Printer did not accept the command');
+  deps.logMsg('INFO', `Printer gcode: ${script.replace(/\n/g, ' | ')}`);
+  return true;
+}
+
+// Lane identifier from a request body: accepts channel 0-3 or lane "E0".
+function channelFrom(body) {
+  if (body && body.channel !== undefined) {
+    const n = parseInt(body.channel, 10);
+    return Number.isFinite(n) && n >= 0 && n <= 3 ? n : null;
+  }
+  const m = /^E(\d)$/.exec(String(body?.lane || '').trim());
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  return n >= 0 && n <= 3 ? n : null;
 }
 
 // Remember the lane's card UID on the spool it was just linked to, so the next
@@ -219,34 +338,134 @@ function registerPrinterLinkApi(app, options) {
   });
 
   // Read each lane's live filament data and suggest an inventory match.
+  // Loaded lanes only — this feeds the "link everything at once" modal.
   app.get('/api/printer/link/preview', async (_req, res) => {
     try {
       const { info, ptc } = await fetchPrinterState();
       const spools = await fs.readJson(deps.dbFile);
-      const lanes = [];
-      info.forEach((entry, idx) => {
-        if (!entry || typeof entry !== 'object') return;
-        const read = readLane(idx, entry, ptc);
-        // Skip empty lanes: nothing loaded, no card, no metadata
-        if (!read.cardUid && !read.vendor && !read.material && !read.filamentPresent) return;
-        const { suggestion, matchedBy, candidates } = matchSpools(spools, read);
-        const linked = spools.find(s => s.spoolmanId === read.currentSpoolId) || null;
-        lanes.push({
-          ...read,
-          currentSpool: linked
-            ? { spoolmanId: linked.spoolmanId, name: linked.name, brand: linked.brand, type: linked.type }
-            : null,
-          // The printer already points at the spool we would pick: nothing to do.
-          alreadyLinked: read.currentSpoolId > 0 && read.currentSpoolId === suggestion,
-          suggestedSpoolId: suggestion,
-          matchedBy,
-          candidates
-        });
-      });
-      res.json({ lanes });
+      res.json({ lanes: buildLanes(info, ptc, spools) });
     } catch (error) {
       deps.logMsg('ERROR', 'Printer link preview failed', error);
       res.status(502).json({ error: `Could not read printer: ${error.message}` });
+    }
+  });
+
+  // Full printer view for the Printer page: every lane, empty ones included.
+  app.get('/api/printer/lanes', async (_req, res) => {
+    const base = printerUrl();
+    if (!base) return res.json({ configured: false, reachable: false, lanes: [] });
+    try {
+      const { info, ptc } = await fetchPrinterState();
+      const spools = await fs.readJson(deps.dbFile);
+      const spoolman = await deps.axios
+        .get(`${base}/server/spoolman/status`, { timeout: 6000 })
+        .catch(() => null);
+      res.json({
+        configured: true,
+        reachable: true,
+        spoolmanConnected: !!spoolman?.data?.result?.spoolman_connected,
+        lanes: buildLanes(info, ptc, spools, { includeEmpty: true })
+      });
+    } catch (error) {
+      res.status(502).json({
+        configured: true,
+        reachable: false,
+        lanes: [],
+        error: `Could not read printer: ${error.message}`
+      });
+    }
+  });
+
+  // Bind (or with spoolmanId 0, unbind) a single lane.
+  app.post('/api/printer/lane/spool', async (req, res) => {
+    const channel = channelFrom(req.body);
+    const spoolId = parseInt(req.body?.spoolmanId, 10);
+    if (channel === null) return res.status(400).json({ error: 'Invalid lane' });
+    if (!Number.isFinite(spoolId) || spoolId < 0) return res.status(400).json({ error: 'Invalid spoolmanId' });
+    try {
+      await sendGcode(`SET_SPOOL_ID LANE=E${channel} SPOOL_ID=${spoolId}`);
+      if (spoolId > 0 && req.body?.cardUid) {
+        try {
+          await rememberCardUid(spoolId, req.body.cardUid);
+        } catch (uidError) {
+          deps.logMsg('ERROR', `Printer: could not store card UID for #${spoolId}`, uidError);
+        }
+      }
+      res.json({ ok: true });
+    } catch (error) {
+      deps.logMsg('ERROR', `Printer: SET_SPOOL_ID E${channel} failed`, error);
+      res.status(502).json({ error: error.message });
+    }
+  });
+
+  // Re-read the RFID tag(s): clear the cached detection, then detect again.
+  app.post('/api/printer/lane/refresh', async (req, res) => {
+    const all = req.body?.all === true;
+    const channel = all ? null : channelFrom(req.body);
+    if (!all && channel === null) return res.status(400).json({ error: 'Invalid lane' });
+    try {
+      const lines = all
+        ? [0, 1, 2, 3].map(i => `FILAMENT_DT_CLEAR CHANNEL=${i}`)
+          .concat([0, 1, 2, 3].map(i => `FILAMENT_DT_UPDATE CHANNEL=${i}`))
+        : [`FILAMENT_DT_CLEAR CHANNEL=${channel}`, `FILAMENT_DT_UPDATE CHANNEL=${channel}`];
+      await sendGcode(lines.join('\n'));
+      res.json({ ok: true });
+    } catch (error) {
+      deps.logMsg('ERROR', 'Printer: filament re-read failed', error);
+      res.status(502).json({ error: error.message });
+    }
+  });
+
+  // Clear a lane's detected filament without re-reading it.
+  app.post('/api/printer/lane/reset', async (req, res) => {
+    const channel = channelFrom(req.body);
+    if (channel === null) return res.status(400).json({ error: 'Invalid lane' });
+    try {
+      await sendGcode(`FILAMENT_DT_CLEAR CHANNEL=${channel}`);
+      res.json({ ok: true });
+    } catch (error) {
+      deps.logMsg('ERROR', `Printer: reset E${channel} failed`, error);
+      res.status(502).json({ error: error.message });
+    }
+  });
+
+  // Set the lane's filament by hand (the firmware page's "User" override), or
+  // push a SpoolKeep spool's brand/material/colour onto the lane.
+  app.post('/api/printer/lane/filament', async (req, res) => {
+    const channel = channelFrom(req.body);
+    if (channel === null) return res.status(400).json({ error: 'Invalid lane' });
+    const material = gcodeSafe(req.body?.material || req.body?.type, 20);
+    if (!material) return res.status(400).json({ error: 'material is required' });
+    const vendor = gcodeSafe(req.body?.vendor || req.body?.brand) || 'Generic';
+    const subType = gcodeSafe(req.body?.subType, 20);
+    const colours = (Array.isArray(req.body?.colours) ? req.body.colours : [req.body?.colourHex])
+      .map(hexColour)
+      .filter(Boolean)
+      .slice(0, 3);
+    const alphaRaw = parseInt(req.body?.alpha, 10);
+    const alpha = Number.isFinite(alphaRaw) && alphaRaw >= 0 && alphaRaw <= 255 ? alphaRaw : 255;
+
+    // Same command shape the firmware's own filament page sends, so the
+    // printer treats this exactly like a manual override there.
+    const script = [
+      'SET_PRINT_FILAMENT_CONFIG',
+      `CONFIG_EXTRUDER=${channel}`,
+      `VENDOR="${vendor}"`,
+      `FILAMENT_TYPE=${material}`,
+      `FILAMENT_SUBTYPE="${subType}"`,
+      `COLOR_NUMS=${colours.length}`,
+      `COLORS=${colours.join(',')}`,
+      'MULTI_MODE=0',
+      `ALPHA=${alpha}`,
+      'FORCE=1'
+    ].join(' ');
+
+    try {
+      await sendGcode(script);
+      res.json({ ok: true });
+    } catch (error) {
+      deps.logMsg('ERROR', `Printer: set filament E${channel} failed`, error);
+      res.status(502).json({ error: error.message });
     }
   });
 

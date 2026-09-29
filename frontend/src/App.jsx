@@ -30,6 +30,7 @@ import PrintFileCard from './components/PrintFileCard';
 import SpoolCard from './components/SpoolCard';
 import AddEditSpoolModal from './components/AddEditSpoolModal';
 import FilamentDefaultsPage from './components/FilamentDefaultsPage';
+import PrinterPage from './components/PrinterPage';
 
 export default function App() {
   // Theme State
@@ -66,7 +67,7 @@ export default function App() {
   const isSubPage = currentPage === 'filament-defaults';
   useEffect(() => {
     // Sub-pages are reached from Settings, so don't restore into one on reload.
-    if (currentPage === 'spools' || currentPage === 'files') {
+    if (currentPage === 'spools' || currentPage === 'files' || currentPage === 'printer') {
       localStorage.setItem('spoolkeep-page', currentPage);
     }
   }, [currentPage]);
@@ -334,7 +335,24 @@ export default function App() {
     const delta = e.changedTouches[0].clientX - touchStartX.current;
     touchStartX.current = null;
     if (Math.abs(delta) < 80) return;
-    navigateTo(delta > 0 ? 'spools' : 'files');
+    // Swipe walks the nav tabs in the order they are shown.
+    const order = ['spools', 'files', 'printer'];
+    const from = order.indexOf(currentPage);
+    if (from === -1) return;
+    const to = from + (delta > 0 ? -1 : 1);
+    if (to >= 0 && to < order.length) navigateTo(order[to]);
+  };
+
+  // The Printer page saves the address on its own so the lanes can be read
+  // without a trip through Settings.
+  const handleSavePrinterUrl = async (url) => {
+    const response = await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ printerUrl: url })
+    });
+    if (!response.ok) throw new Error('Failed to save the printer address');
+    setPrinterUrl(url);
   };
 
   const handleDeletePrintFile = async (id) => {
@@ -1300,6 +1318,23 @@ export default function App() {
             >
               Print Files
             </button>
+            <button
+              className={`nav-tab-btn ${currentPage === 'printer' ? 'active' : ''}`}
+              onClick={() => navigateTo('printer')}
+              style={{
+                padding: '0.4rem 1.15rem',
+                borderRadius: 'var(--md-shape-corner-full)',
+                fontSize: '0.85rem',
+                fontWeight: '600',
+                border: 'none',
+                background: currentPage === 'printer' ? 'var(--md-sys-color-primary)' : 'none',
+                color: currentPage === 'printer' ? 'var(--md-sys-color-on-primary)' : 'var(--md-sys-color-outline)',
+                cursor: 'pointer',
+                transition: 'var(--transition-m3)'
+              }}
+            >
+              Printer
+            </button>
           </div>
         </div>
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -1373,6 +1408,13 @@ export default function App() {
             profileDbStatus={profileDbStatus}
             onRefreshProfileDb={handleRefreshProfileDb}
             onLoadProfileDbStatus={fetchProfileDbStatus}
+          />
+        ) : currentPage === 'printer' ? (
+          <PrinterPage
+            spools={spools}
+            printerUrl={printerUrl}
+            onSavePrinterUrl={handleSavePrinterUrl}
+            onSpoolsChanged={fetchSpools}
           />
         ) : currentPage === 'spools' ? (
           <>
