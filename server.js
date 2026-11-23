@@ -1972,6 +1972,15 @@ initDb().then(() => {
   // Spoolman event websocket (ws://host:port/api/v1/spool) — required by
   // Moonraker's [spoolman] component for usage tracking.
   spoolmanApi.attachSpoolmanWebSocket(server);
+  // Watch for RFID cards the printer has loaded that no spool claims. The
+  // Printer page already reports these when it is open; this catches them
+  // when it is not. UNBOUND_CARD_WATCH_SECONDS=0 turns it off.
+  const watchSeconds = process.env.UNBOUND_CARD_WATCH_SECONDS === undefined
+    ? 60
+    : parseInt(process.env.UNBOUND_CARD_WATCH_SECONDS, 10);
+  if (Number.isFinite(watchSeconds) && watchSeconds > 0) {
+    printerLink.startUnboundCardWatch({ intervalMs: watchSeconds * 1000 });
+  }
 }).catch(err => {
   logMsg('ERROR', 'Database initialization error', err);
 });

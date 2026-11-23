@@ -28,6 +28,13 @@ const fs = require('fs-extra');
 
 let deps = null; // { dbFile, logMsg, axios, getPrinterUrl, onSpoolUpdated }
 
+// Last set of unbound card UIDs we logged, so polling the Printer page every
+// few seconds does not fill the log with the same line.
+let lastUnboundKey = null;
+// Last printer-unreachable message the watcher logged, so an offline printer
+// does not write a line every interval.
+let lastWatchError = null;
+
 function printerUrl() {
   const u = (deps.getPrinterUrl() || '').trim().replace(/\/+$/, '');
   if (!u) return '';
@@ -220,6 +227,38 @@ function readLane(idx, fd, ptc) {
   };
 }
 
+// A card the printer scanned that no spool in the inventory claims. The
+// firmware's SpoolLink reports this to Klipper ("no spool found for card ...")
+// and writes nothing to its own log, so without this the only trace of an
+// unbound card is a transient message on the printer's console.
+function logUnboundCards(lanes) {
+  const unbound = lanes
+    .filter(lane => lane.cardUid && lane.matchedBy !== 'card')
+    .map(lane => ({
+      lane: lane.lane || `E${lane.channel}`,
+      cardUid: lane.cardUid,
+      suggestedSpoolId: lane.suggestedSpoolId
+    }));
+
+  const key = unbound.map(u => `${u.lane}:${u.cardUid}`).sort().join('|');
+  if (key === lastUnboundKey) return;
+  const had = !!lastUnboundKey;
+  lastUnboundKey = key;
+
+  if (!unbound.length) {
+    // Only worth a line if we had complained before; stays quiet on startup.
+    if (had) deps.logMsg('INFO', 'Printer link: every scanned card is bound to a spool');
+    return;
+  }
+  unbound.forEach(u => {
+    const hint = Number.isFinite(u.suggestedSpoolId) && u.suggestedSpoolId > 0
+      ? `; closest inventory match is spool #${u.suggestedSpoolId}`
+      : '; no confident inventory match';
+    deps.logMsg('WARNING',
+      `Printer link: card ${u.cardUid} in lane ${u.lane} is not bound to any spool${hint}`);
+  });
+}
+
 // Build the full per-lane view: printer read + inventory match + the spool the
 // printer is currently bound to.
 function buildLanes(info, ptc, spools, { includeEmpty = false } = {}) {
@@ -309,6 +348,36 @@ async function rememberCardUid(spoolmanId, cardUid) {
   if (deps.onSpoolUpdated) deps.onSpoolUpdated(spool);
 }
 
+// Poll the printer for unbound cards even when nobody has the Printer page
+// open. Shares lastUnboundKey with the page's own poll, so whichever runs
+// first reports a change and the other stays quiet.
+function startUnboundCardWatch({ intervalMs = 60000 } = {}) {
+  const tick = async () => {
+    if (!printerUrl()) return; // no printer configured yet; nothing to do
+    try {
+      const { info, ptc } = await fetchPrinterState();
+      const spools = await fs.readJson(deps.dbFile);
+      logUnboundCards(buildLanes(info, ptc, spools, { includeEmpty: true }));
+    } catch (error) {
+      // Printer off or unreachable is the normal case here, not a fault worth
+      // a log line every interval. Only note it when it changes.
+      const msg = error.message || String(error);
+      if (msg !== lastWatchError) {
+        lastWatchError = msg;
+        deps.logMsg('WARNING', `Unbound card watch: could not read printer: ${msg}`);
+      }
+      return;
+    }
+    lastWatchError = null;
+  };
+
+  const timer = setInterval(() => { tick(); }, intervalMs);
+  timer.unref?.(); // never hold the process open on its own
+  tick(); // first pass immediately, so a restart reports straight away
+  deps.logMsg('INFO', `Unbound card watch started (every ${Math.round(intervalMs / 1000)}s)`);
+  return () => clearInterval(timer);
+}
+
 function registerPrinterLinkApi(app, options) {
   deps = {
     dbFile: options.dbFile,
@@ -360,11 +429,13 @@ function registerPrinterLinkApi(app, options) {
       const spoolman = await deps.axios
         .get(`${base}/server/spoolman/status`, { timeout: 6000 })
         .catch(() => null);
+      const lanes = buildLanes(info, ptc, spools, { includeEmpty: true });
+      logUnboundCards(lanes);
       res.json({
         configured: true,
         reachable: true,
         spoolmanConnected: !!spoolman?.data?.result?.spoolman_connected,
-        lanes: buildLanes(info, ptc, spools, { includeEmpty: true })
+        lanes
       });
     } catch (error) {
       res.status(502).json({
@@ -508,4 +579,4 @@ function registerPrinterLinkApi(app, options) {
   });
 }
 
-module.exports = { registerPrinterLinkApi };
+module.exports = { registerPrinterLinkApi, startUnboundCardWatch };
