@@ -14,6 +14,7 @@
 //   GET   /api/v1/spool/:id                  - get spool by numeric id
 //   PATCH /api/v1/spool/:id                  - update spool (extra.card_uids, weights)
 //   PUT   /api/v1/spool/:id/use              - report filament usage (use_length mm / use_weight g)
+//   WS    /api/v1/                           - catch-all event stream (used by Fluidd)
 //   WS    /api/v1/spool                      - spool event stream (added/updated/deleted)
 
 const fs = require('fs-extra');
@@ -33,6 +34,20 @@ const DEFAULT_DENSITY = 1.24;
 const DEFAULT_NET_WEIGHT = 1000;
 
 let deps = null; // { dbFile, fieldsFile, dataDir, logMsg, isEnabled }
+
+// Websocket paths we accept an upgrade on. '/api/v1' is Spoolman's catch-all
+// (every resource); the rest are per-resource. Trailing slashes are stripped
+// before the lookup, so '/api/v1/' matches '/api/v1'.
+const WS_PATHS = new Set([
+  '/api/v1',
+  '/api/v1/spool',
+  '/api/v1/filament',
+  '/api/v1/vendor'
+]);
+// Paths that should receive spool events: the catch-all and the spool one.
+// A client listening on /api/v1/filament asked for filament events and must
+// not be sent spool ones.
+const SPOOL_EVENT_PATHS = new Set(['/api/v1', '/api/v1/spool']);
 let wss = null;
 
 function apiEnabled() {
@@ -230,8 +245,16 @@ function attachSpoolmanWebSocket(httpServer) {
 
   httpServer.on('upgrade', (req, socket, head) => {
     const pathname = (req.url || '').split('?')[0].replace(/\/+$/, '');
-    if (pathname === '/api/v1/spool' && apiEnabled()) {
+    // Spoolman exposes one websocket per resource plus a catch-all at
+    // /api/v1/ that reports events for every resource. Fluidd's live-update
+    // socket uses the catch-all (it appends "api/v1/" to the configured
+    // Spoolman URL), while Moonraker's [spoolman] component uses
+    // /api/v1/spool. Accept both, and the sibling resources Spoolman has, so
+    // a client subscribing to them gets a working socket rather than a
+    // dropped connection.
+    if (WS_PATHS.has(pathname) && apiEnabled()) {
       wss.handleUpgrade(req, socket, head, (ws) => {
+        ws.resourcePath = pathname;
         wss.emit('connection', ws, req);
       });
     } else {
@@ -243,7 +266,8 @@ function attachSpoolmanWebSocket(httpServer) {
     ws.isAlive = true;
     ws.on('pong', () => { ws.isAlive = true; });
     ws.on('error', () => {});
-    deps.logMsg('INFO', `Spoolman WS client connected (${req.socket.remoteAddress})`);
+    deps.logMsg('INFO',
+      `Spoolman WS client connected on ${ws.resourcePath || '?'} (${req.socket.remoteAddress})`);
     ws.on('close', () => {
       deps.logMsg('INFO', 'Spoolman WS client disconnected');
     });
@@ -272,7 +296,11 @@ function broadcastSpoolEvent(type, spool) {
     payload: toSpoolmanSpool(spool)
   });
   wss.clients.forEach((ws) => {
-    if (ws.readyState === ws.OPEN) ws.send(message);
+    if (ws.readyState !== ws.OPEN) return;
+    // Sockets opened before resourcePath existed, or on an unknown path, are
+    // treated as spool listeners so nothing regresses.
+    if (ws.resourcePath && !SPOOL_EVENT_PATHS.has(ws.resourcePath)) return;
+    ws.send(message);
   });
 }
 
