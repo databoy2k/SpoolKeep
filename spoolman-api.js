@@ -10,7 +10,7 @@
 //   GET   /api/v1/health                     - health probe
 //   GET   /api/v1/field/:entityType          - list custom field definitions
 //   POST  /api/v1/field/:entityType/:key     - create/update a custom field definition
-//   GET   /api/v1/spool                      - list spools (Spoolman wire format)
+//   GET   /api/v1/spool                      - list spools (Spoolman wire format; limit, allow_archived)
 //   GET   /api/v1/spool/:id                  - get spool by numeric id
 //   PATCH /api/v1/spool/:id                  - update spool (extra.card_uids, weights)
 //   PUT   /api/v1/spool/:id/use              - report filament usage (use_length mm / use_weight g)
@@ -379,10 +379,18 @@ function registerSpoolmanApi(app, options) {
   // List spools
   app.get('/api/v1/spool', async (req, res) => {
     try {
-      let spools = await readSpools();
+      const spools = await readSpools();
+      // Spoolman hides archived spools unless allow_archived is set. SpoolKeep
+      // has no archive concept yet, so toSpoolmanSpool reports archived:false
+      // for everything and this filter keeps the whole list — but the flag is
+      // honoured, so spoollink_migrate.py (which asks for allow_archived=true)
+      // and anything else reading this endpoint get Spoolman's semantics
+      // rather than a silently ignored parameter.
+      const allowArchived = /^(1|true|yes)$/i.test(String(req.query.allow_archived || ''));
+      let mapped = spools.map(toSpoolmanSpool);
+      if (!allowArchived) mapped = mapped.filter(s => !s.archived);
       const limit = parseInt(req.query.limit, 10);
-      if (Number.isFinite(limit) && limit > 0) spools = spools.slice(0, limit);
-      const mapped = spools.map(toSpoolmanSpool);
+      if (Number.isFinite(limit) && limit > 0) mapped = mapped.slice(0, limit);
       res.set('x-total-count', String(mapped.length));
       res.json(mapped);
     } catch (error) {
