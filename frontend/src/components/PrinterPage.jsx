@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Printer, RefreshCw, Link2, Unlink, Loader2, AlertCircle, Search,
-  X, Check, CreditCard, Pencil, Eraser, Save, TriangleAlert
+  X, Check, CreditCard, Pencil, Eraser, Save, TriangleAlert, Plus
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -32,6 +32,8 @@ export default function PrinterPage({ spools = [], printerUrl = '', onSavePrinte
   const [savingUrl, setSavingUrl] = useState(false);
   const [picker, setPicker] = useState(null);   // { lane }
   const [editor, setEditor] = useState(null);   // { lane, vendor, material, subType, colour }
+  const [creator, setCreator] = useState(null); // { lane, name, brand, material, subType, colour, netWeight, ... }
+  const [creating, setCreating] = useState(false);
   const pollRef = useRef(null);
 
   useEffect(() => { setUrlDraft(printerUrl); }, [printerUrl]);
@@ -122,6 +124,62 @@ export default function PrinterPage({ spools = [], printerUrl = '', onSavePrinte
     } finally {
       setRefreshingAll(false);
     }
+  }
+
+  // Add the lane's filament to the inventory as a new spool, then bind the
+  // lane to it in one go. Saves typing a spool in by hand on the Spools page
+  // and coming back here to link it — the tag already knows most of this.
+  async function createSpoolFromLane(form) {
+    const lane = form.lane;
+    setCreating(true);
+    try {
+      const res = await fetch('/api/spools', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: form.name.trim() || [form.brand, form.material, form.subType].filter(Boolean).join(' ') || 'New Spool',
+          brand: form.brand.trim() || 'Generic',
+          type: form.material,
+          colourHex: form.colour,
+          netWeight: parseFloat(form.netWeight) > 0 ? parseFloat(form.netWeight) : 1000,
+          // Temps the tag reported, where it had them; the server defaults the rest.
+          ...(form.minTemp ? { minTemp: form.minTemp } : {}),
+          ...(form.maxTemp ? { maxTemp: form.maxTemp } : {}),
+          ...(form.bedTemp ? { bedMinTemp: form.bedTemp, bedMaxTemp: form.bedTemp } : {}),
+          notes: form.subType ? `${form.subType} — added from extruder ${lane.extruder}` : ''
+        })
+      });
+      const spool = await res.json();
+      if (!res.ok) throw new Error(spool.error || 'Could not create the spool');
+      setCreator(null);
+      if (onSpoolsChanged) onSpoolsChanged();
+      // Bind straight away; this also stores the card UID on the new spool.
+      await linkSpool(lane, spool);
+      toast.success(`${spool.name} added and linked to extruder ${lane.extruder}.`);
+      return true;
+    } catch (e) {
+      toast.error(e.message);
+      return false;
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  // Seed the form from what the lane reports, so most of it is already right.
+  function openCreator(lane) {
+    const subType = lane.subType || '';
+    setCreator({
+      lane,
+      name: [lane.vendor, lane.material, subType].filter(Boolean).join(' '),
+      brand: lane.vendor || '',
+      material: lane.material || 'PLA',
+      subType,
+      colour: `#${String(lane.colorHex || '7F8C8D').replace(/^#/, '')}`,
+      netWeight: '1000',
+      minTemp: lane.rfid?.minTemp || '',
+      maxTemp: lane.rfid?.maxTemp || '',
+      bedTemp: lane.rfid?.bedTemp || ''
+    });
   }
 
   async function applyFilament(form) {
@@ -232,6 +290,7 @@ export default function PrinterPage({ spools = [], printerUrl = '', onSavePrinte
             lane={lane}
             busy={busyLane === lane.lane}
             onPick={() => setPicker({ lane })}
+            onNew={() => openCreator(lane)}
             onUnlink={() => unlinkLane(lane)}
             onRefresh={() => refreshLane(lane)}
             onReset={() => resetLane(lane)}
@@ -245,6 +304,17 @@ export default function PrinterPage({ spools = [], printerUrl = '', onSavePrinte
           />
         ))}
       </div>
+
+      {creator && (
+        <NewSpoolFromLane
+          value={creator}
+          spools={spools}
+          busy={creating}
+          onChange={setCreator}
+          onClose={() => setCreator(null)}
+          onCreate={() => createSpoolFromLane(creator)}
+        />
+      )}
 
       {picker && (
         <SpoolPicker
@@ -293,7 +363,7 @@ function Badge({ children, tone = 'outline', title }) {
   );
 }
 
-function LaneCard({ lane, busy, onPick, onUnlink, onRefresh, onReset, onEdit }) {
+function LaneCard({ lane, busy, onPick, onNew, onUnlink, onRefresh, onReset, onEdit }) {
   const spool = lane.currentSpool;
   const remaining = remainingPercent(spool);
   const swatches = lane.colours?.length ? lane.colours : [lane.colorHex || 'FFFFFF'];
@@ -381,6 +451,11 @@ function LaneCard({ lane, busy, onPick, onUnlink, onRefresh, onReset, onEdit }) 
         <button className="btn btn-primary" onClick={onPick} style={{ fontSize: '0.75rem', padding: '0.35rem 0.7rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
           <Link2 size={13} /> {lane.currentSpoolId > 0 ? 'Change spool' : 'Link spool'}
         </button>
+        {(lane.cardUid || lane.vendor || lane.material) && lane.matchedBy !== 'card' && (
+          <button className="btn btn-secondary" onClick={onNew} title="Add this filament to the inventory as a new spool and link the lane to it" style={{ fontSize: '0.75rem', padding: '0.35rem 0.7rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+            <Plus size={13} /> New spool
+          </button>
+        )}
         {lane.currentSpoolId > 0 && (
           <button className="btn btn-secondary" onClick={onUnlink} style={{ fontSize: '0.75rem', padding: '0.35rem 0.7rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
             <Unlink size={13} /> Unlink
@@ -481,6 +556,94 @@ function SpoolPicker({ lane, spools, onClose, onSelect }) {
               );
             })}
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Add the lane's filament to the inventory as a new spool and link it in one
+// step. Everything is seeded from what the lane reports, so a tagged spool
+// usually needs no typing at all — and the card UID gets stored on the new
+// spool by the link, so the printer recognises it from then on.
+function NewSpoolFromLane({ value, spools, busy, onChange, onClose, onCreate }) {
+  const materials = useMemo(() => {
+    const fromInventory = spools.map(s => s.type).filter(Boolean);
+    return Array.from(new Set([...COMMON_MATERIALS, ...fromInventory]));
+  }, [spools]);
+  const brands = useMemo(
+    () => Array.from(new Set(spools.map(s => s.brand).filter(Boolean))).sort(),
+    [spools]);
+
+  const set = (patch) => onChange({ ...value, ...patch });
+  const lane = value.lane;
+  const hasTagData = !!(lane.vendor || lane.material);
+
+  return (
+    <div className="modal-overlay">
+      <div className="modal-content" style={{ maxWidth: '460px' }}>
+        <div className="modal-header">
+          <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <Plus size={18} /> New spool — Extruder {lane.extruder}
+          </h2>
+          <button className="modal-close" onClick={onClose}><X size={20} /></button>
+        </div>
+        <div className="modal-body" style={{ padding: '1.25rem', display: 'grid', gap: '0.85rem' }}>
+          <p style={{ margin: 0, fontSize: '0.78rem', color: 'var(--md-sys-color-outline)' }}>
+            {hasTagData
+              ? 'Filled in from what this lane reports. Adjust anything that looks wrong.'
+              : 'This lane reports no filament data, so fill it in yourself.'}
+            {lane.cardUid && ' The card UID below is stored on the spool, so the printer will recognise it next time.'}
+          </p>
+          {lane.cardUid && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.75rem', color: 'var(--md-sys-color-outline)' }}>
+              <CreditCard size={12} />
+              <span style={{ fontFamily: 'monospace' }}>{lane.cardUid}</span>
+            </div>
+          )}
+          <div>
+            <label className="form-label" style={{ fontSize: '0.75rem' }}>Name</label>
+            <input className="form-input" value={value.name} onChange={e => set({ name: e.target.value })} placeholder="Make Market PLA" />
+          </div>
+          <div>
+            <label className="form-label" style={{ fontSize: '0.75rem' }}>Brand</label>
+            <input className="form-input" list="printer-brands" value={value.brand} onChange={e => set({ brand: e.target.value })} placeholder="Generic" />
+            <datalist id="printer-brands">
+              {brands.map(b => <option key={b} value={b} />)}
+            </datalist>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+            <div>
+              <label className="form-label" style={{ fontSize: '0.75rem' }}>Material</label>
+              <select className="form-input" value={value.material} onChange={e => set({ material: e.target.value })}>
+                {materials.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="form-label" style={{ fontSize: '0.75rem' }}>Sub-type</label>
+              <input className="form-input" value={value.subType} onChange={e => set({ subType: e.target.value })} placeholder="Silk, Matte…" />
+            </div>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+            <div>
+              <label className="form-label" style={{ fontSize: '0.75rem' }}>Colour</label>
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                <input type="color" value={value.colour} onChange={e => set({ colour: e.target.value })} style={{ width: '48px', height: '38px', padding: 0, border: 'none', background: 'none', cursor: 'pointer' }} />
+                <input className="form-input" value={value.colour} onChange={e => set({ colour: e.target.value })} style={{ fontFamily: 'monospace' }} />
+              </div>
+            </div>
+            <div>
+              <label className="form-label" style={{ fontSize: '0.75rem' }}>Spool weight (g)</label>
+              <input className="form-input" type="number" min="1" value={value.netWeight} onChange={e => set({ netWeight: e.target.value })} placeholder="1000" />
+            </div>
+          </div>
+        </div>
+        <div className="modal-footer" style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', padding: '1rem 1.25rem' }}>
+          <button className="btn btn-secondary" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="btn btn-primary" onClick={onCreate} disabled={busy || !value.material} style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+            {busy ? <Loader2 size={14} className="spin" /> : <Save size={14} />}
+            {busy ? 'Adding…' : 'Add and link'}
+          </button>
         </div>
       </div>
     </div>
