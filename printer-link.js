@@ -23,6 +23,9 @@
 //   GET  /api/printer/status        - is the printer/Moonraker reachable + Spoolman connected
 //   GET  /api/printer/link/preview  - per-lane read data + suggested inventory match
 //   POST /api/printer/link/apply    - { links: [{ lane, spoolmanId, cardUid }] } -> SET_SPOOL_ID
+//   POST /api/printer/lane/load     - CHANGE_TOOL  (feed this lane into the hotend)
+//   POST /api/printer/lane/unload   - LANE_UNLOAD  (retract this lane out of the hotend)
+//   GET  /api/printer/screen/*      - proxy for the firmware's touchscreen mirror (/screen)
 
 const fs = require('fs-extra');
 
@@ -39,6 +42,48 @@ function printerUrl() {
   const u = (deps.getPrinterUrl() || '').trim().replace(/\/+$/, '');
   if (!u) return '';
   return /^https?:\/\//.test(u) ? u : `http://${u}`;
+}
+
+// The screen mirror is served by the printer's web server on port 80, while
+// the Moonraker address people enter is often the API's own port 7125. So the
+// screen lives at the same host with the port dropped. Whichever answers is
+// remembered until the printer address changes.
+let screenBase = null;
+let screenBaseFor = null;
+
+function screenCandidates() {
+  const base = printerUrl();
+  if (!base) return [];
+  const out = [base];
+  try {
+    const u = new URL(base);
+    if (u.port) out.push(`${u.protocol}//${u.hostname}`);
+  } catch { /* not a parseable URL; the configured value is all we have */ }
+  return out;
+}
+
+// Run `attempt` against each candidate base until one does not 404. Returns
+// that response; throws the last error when none answers.
+async function viaScreen(attempt) {
+  const cached = screenBaseFor === printerUrl() ? screenBase : null;
+  const bases = cached ? [cached, ...screenCandidates().filter(b => b !== cached)] : screenCandidates();
+  if (!bases.length) throw new Error('No printer URL configured');
+  let lastError = null;
+  for (const base of bases) {
+    try {
+      const resp = await attempt(base);
+      screenBase = base;
+      screenBaseFor = printerUrl();
+      return resp;
+    } catch (error) {
+      lastError = error;
+      if (screenBase === base) { screenBase = null; screenBaseFor = null; }
+      // Anything other than "this host does not serve /screen" is a real
+      // failure and should not be retried against another port.
+      if (error.response && error.response.status !== 404) throw error;
+    }
+  }
+  throw lastError;
 }
 
 // Convert a filament_detect CARD_UID (array of byte ints) to uppercase hex.
@@ -134,12 +179,34 @@ async function fetchPrinterState() {
   const base = printerUrl();
   if (!base) throw new Error('No printer URL configured');
   const resp = await deps.axios.get(
-    `${base}/printer/objects/query?filament_detect&print_task_config`,
+    `${base}/printer/objects/query?filament_detect&print_task_config&print_stats&toolhead`,
     { timeout: 8000 });
   const status = resp.data?.result?.status || {};
   const info = status.filament_detect?.info;
   if (!Array.isArray(info)) throw new Error('Printer did not return filament_detect data');
-  return { info, ptc: status.print_task_config || {} };
+  return {
+    info,
+    ptc: status.print_task_config || {},
+    printState: status.print_stats?.state || null,
+    // toolhead.extruder is "extruder" for E0, then "extruder1".."extruder3"
+    activeExtruder: extruderIndex(status.toolhead?.extruder)
+  };
+}
+
+// "extruder" -> 0, "extruder2" -> 2, anything else -> null
+function extruderIndex(name) {
+  const m = /^extruder(\d*)$/.exec(String(name || ''));
+  if (!m) return null;
+  return m[1] === '' ? 0 : parseInt(m[1], 10);
+}
+
+// Feeding filament moves the toolhead and heats the nozzle, so it is only safe
+// while the printer is idle. The firmware refuses it mid-print too, but with a
+// coded error that means nothing to anyone reading it here.
+function feedBlockedReason(printState) {
+  if (printState === 'printing') return 'The printer is printing; load and unload are only available when it is idle.';
+  if (printState === 'paused') return 'The print is paused; resume or cancel it before loading or unloading by hand.';
+  return null;
 }
 
 // Merge one lane's filament_detect entry with print_task_config into the
@@ -309,12 +376,12 @@ function hexColour(value) {
   return /^[0-9A-F]{6}$/.test(s) ? s : null;
 }
 
-async function sendGcode(script) {
+async function sendGcode(script, timeoutMs = 15000) {
   const base = printerUrl();
   if (!base) throw new Error('No printer URL configured');
   const resp = await deps.axios.get(
     `${base}/printer/gcode/script`,
-    { params: { script }, timeout: 15000 });
+    { params: { script }, timeout: timeoutMs });
   if (resp.data?.result !== 'ok') throw new Error('Printer did not accept the command');
   deps.logMsg('INFO', `Printer gcode: ${script.replace(/\n/g, ' | ')}`);
   return true;
@@ -424,7 +491,7 @@ function registerPrinterLinkApi(app, options) {
     const base = printerUrl();
     if (!base) return res.json({ configured: false, reachable: false, lanes: [] });
     try {
-      const { info, ptc } = await fetchPrinterState();
+      const { info, ptc, printState, activeExtruder } = await fetchPrinterState();
       const spools = await fs.readJson(deps.dbFile);
       const spoolman = await deps.axios
         .get(`${base}/server/spoolman/status`, { timeout: 6000 })
@@ -435,6 +502,10 @@ function registerPrinterLinkApi(app, options) {
         configured: true,
         reachable: true,
         spoolmanConnected: !!spoolman?.data?.result?.spoolman_connected,
+        printState,
+        activeExtruder,
+        // Null when loading/unloading is allowed; otherwise why it is not.
+        feedBlocked: feedBlockedReason(printState),
         lanes
       });
     } catch (error) {
@@ -444,6 +515,64 @@ function registerPrinterLinkApi(app, options) {
         lanes: [],
         error: `Could not read printer: ${error.message}`
       });
+    }
+  });
+
+  // ---- Touchscreen mirror -------------------------------------------------
+  // The extended firmware mirrors the printer's own 800x480 touchscreen at
+  // /screen: a PNG snapshot endpoint (ETag-tagged, so an unchanged screen
+  // costs a 304) and a touch endpoint that injects down/move/up events at
+  // image coordinates. Proxying both keeps the browser talking only to
+  // SpoolKeep — so the mirror works from anywhere SpoolKeep is reachable, and
+  // over https without mixed-content warnings.
+
+  app.get('/api/printer/screen/snapshot', async (req, res) => {
+    const base = printerUrl();
+    if (!base) return res.status(400).json({ error: 'No printer URL configured' });
+    try {
+      const headers = {};
+      if (req.headers['if-none-match']) headers['If-None-Match'] = req.headers['if-none-match'];
+      const resp = await viaScreen(b => deps.axios.get(`${b}/screen/snapshot`, {
+        headers,
+        responseType: 'arraybuffer',
+        timeout: 8000,
+        // 304 is the normal "screen has not changed" answer, not a fault.
+        validateStatus: status => status === 200 || status === 304
+      }));
+      const etag = resp.headers?.etag;
+      if (etag) res.set('ETag', etag);
+      res.set('Cache-Control', 'no-cache');
+      if (resp.status === 304) return res.status(304).end();
+      res.type(resp.headers?.['content-type'] || 'image/png');
+      res.send(Buffer.from(resp.data));
+    } catch (error) {
+      // 404 here means the firmware's screen mirror is not enabled, which the
+      // page shows as "not available" rather than an error.
+      const status = error.response?.status === 404 ? 404 : 502;
+      res.status(status).json({ error: `Could not read the printer's screen: ${error.message}` });
+    }
+  });
+
+  app.post('/api/printer/screen/touch', async (req, res) => {
+    const base = printerUrl();
+    if (!base) return res.status(400).json({ error: 'No printer URL configured' });
+    const action = String(req.query.a || req.body?.a || '');
+    const x = parseInt(req.query.x ?? req.body?.x, 10);
+    const y = parseInt(req.query.y ?? req.body?.y, 10);
+    if (!['down', 'move', 'up'].includes(action)) {
+      return res.status(400).json({ error: 'Invalid touch action' });
+    }
+    if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x > 4096 || y > 4096) {
+      return res.status(400).json({ error: 'Invalid touch coordinates' });
+    }
+    try {
+      await viaScreen(b => deps.axios.post(`${b}/screen/touch`, null, {
+        params: { a: action, x, y },
+        timeout: 6000
+      }));
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(502).json({ error: error.message });
     }
   });
 
@@ -499,6 +628,48 @@ function registerPrinterLinkApi(app, options) {
       res.status(502).json({ error: error.message });
     }
   });
+
+  // Feed a lane into the hotend (load) or retract it back out (unload).
+  //
+  // The extended firmware exposes the printer's own feeder routine as two
+  // macros that take a lane name: CHANGE_TOOL (which unloads whatever is in
+  // the hotend first) and LANE_UNLOAD. Both resolve to the native
+  // `AUTO_FEEDING EXTRUDER=n LOAD=1|UNLOAD=1`.
+  //
+  // AUTO_FEEDING_PREHEAT first, so the call works from cold: it heats to the
+  // loaded filament's own temperature, the same step the firmware's print
+  // flow takes before it feeds. The whole thing is one blocking Moonraker
+  // call that runs for a minute or more, hence the long timeout.
+  async function feedLane(req, res, mode) {
+    const channel = channelFrom(req.body);
+    if (channel === null) return res.status(400).json({ error: 'Invalid lane' });
+    try {
+      const { printState } = await fetchPrinterState();
+      const blocked = feedBlockedReason(printState);
+      if (blocked) return res.status(409).json({ error: blocked });
+    } catch (error) {
+      return res.status(502).json({ error: `Could not read printer: ${error.message}` });
+    }
+    const script = [
+      `AUTO_FEEDING_PREHEAT EXTRUDER=${channel}`,
+      mode === 'load' ? `CHANGE_TOOL LANE=E${channel}` : `LANE_UNLOAD LANE=E${channel}`
+    ].join('\n');
+    try {
+      await sendGcode(script, 300000);
+      res.json({ ok: true });
+    } catch (error) {
+      deps.logMsg('ERROR', `Printer: ${mode} E${channel} failed`, error);
+      const timedOut = error.code === 'ECONNABORTED' || /timeout/i.test(error.message || '');
+      res.status(502).json({
+        error: timedOut
+          ? `The printer did not finish ${mode}ing within five minutes. Check the printer's screen.`
+          : error.message
+      });
+    }
+  }
+
+  app.post('/api/printer/lane/load', (req, res) => feedLane(req, res, 'load'));
+  app.post('/api/printer/lane/unload', (req, res) => feedLane(req, res, 'unload'));
 
   // Set the lane's filament by hand (the firmware page's "User" override), or
   // push a SpoolKeep spool's brand/material/colour onto the lane.

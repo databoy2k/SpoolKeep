@@ -91,11 +91,28 @@ lanes, refreshing every few seconds:
 - a *mismatch* badge when the RFID tag and the printer's current settings disagree,
 - the suggested inventory match when the lane is bound to something else (or nothing).
 
-Per lane you can link or change the spool (picker opens on the best match), unlink, re-read
-the RFID tag, clear the lane, or override its filament by hand. Every action is sent by the
-SpoolKeep server over Moonraker — `SET_SPOOL_ID`, `FILAMENT_DT_CLEAR` / `FILAMENT_DT_UPDATE`
-and `SET_PRINT_FILAMENT_CONFIG`, exactly as the firmware's own page sends them — so the page
-works from any device that can reach SpoolKeep, whether or not it can reach the printer.
+Per lane you can **load** the filament into the nozzle or **unload** it again, link or change
+the spool (picker opens on the best match), unlink, re-read the RFID tag, clear the lane, or
+override its filament by hand. Each group of buttons says underneath what it does, and the
+collapsible *What these buttons do* panel at the top of the page explains them one by one.
+
+Load and unload run the printer's own feeder routine (`AUTO_FEEDING_PREHEAT` then
+`CHANGE_TOOL` / `LANE_UNLOAD`), so the nozzle is heated first and whatever was loaded is
+backed out before a new lane is fed in. They take a minute or two, and are disabled while
+the printer is printing or paused.
+
+Every action is sent by the SpoolKeep server over Moonraker — `SET_SPOOL_ID`,
+`FILAMENT_DT_CLEAR` / `FILAMENT_DT_UPDATE` and `SET_PRINT_FILAMENT_CONFIG`, exactly as the
+firmware's own page sends them — so the page works from any device that can reach SpoolKeep,
+whether or not it can reach the printer.
+
+**Printer screen** mirrors the machine's own touchscreen in the page: a live image of the
+panel that you can click or tap exactly like the real thing, for answering the printer's
+own prompts and driving any screen SpoolKeep does not reproduce. It needs the extended
+firmware's screen mirror (`/screen`), which is served on the printer's web port — SpoolKeep
+finds it even when the Moonraker address you entered uses port 7125. The image and the
+touches are proxied through the SpoolKeep server, so this too works from anywhere SpoolKeep
+is reachable.
 
 #### Printer Auto-Link
 Instead of running `SET_SPOOL_ID` per lane (or picking spools by hand on the firmware's

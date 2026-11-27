@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Printer, RefreshCw, Link2, Unlink, Loader2, AlertCircle, Search,
-  X, Check, CreditCard, Pencil, Eraser, Save, TriangleAlert, Plus
+  X, Check, CreditCard, Pencil, Eraser, Save, TriangleAlert, Plus,
+  ArrowDownToLine, ArrowUpFromLine, Monitor, ChevronDown, ChevronUp, Info
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -15,6 +16,62 @@ import { toast } from 'sonner';
 
 const POLL_MS = 5000;
 const COMMON_MATERIALS = ['PLA', 'PETG', 'ABS', 'ASA', 'TPU', 'PC', 'PA', 'PVA', 'HIPS'];
+
+// What every button on a lane card actually does. Shown in the collapsible
+// guide at the top of the page and used for each button's tooltip, so the two
+// can never drift apart.
+const BUTTON_GUIDE = [
+  {
+    key: 'load',
+    icon: ArrowDownToLine,
+    label: 'Load',
+    text: 'Feeds this lane\'s filament into the nozzle, unloading whatever was in it first. The printer heats up and runs its own feed routine — it takes a minute or two and the printer must be idle.'
+  },
+  {
+    key: 'unload',
+    icon: ArrowUpFromLine,
+    label: 'Unload',
+    text: 'Retracts this lane\'s filament back out of the nozzle so the spool can be swapped. Also heats first, also needs the printer idle.'
+  },
+  {
+    key: 'link',
+    icon: Link2,
+    label: 'Link spool / Change spool',
+    text: 'Tells the printer which spool from your SpoolKeep inventory is in this lane, so filament used while printing is counted against that spool. Moves no filament.'
+  },
+  {
+    key: 'new',
+    icon: Plus,
+    label: 'New spool',
+    text: 'Adds the filament this lane reports to your inventory as a new spool and links the lane to it in one step. Shown when the lane\'s filament is not in the inventory yet.'
+  },
+  {
+    key: 'unlink',
+    icon: Unlink,
+    label: 'Unlink',
+    text: 'Drops the link between this lane and the inventory spool. Usage stops being counted; the filament stays where it is.'
+  },
+  {
+    key: 'reread',
+    icon: RefreshCw,
+    label: 'Re-read tag',
+    text: 'Makes the printer scan this lane\'s RFID tag again. Use it after putting a different spool in the lane, or if the detected filament looks wrong.'
+  },
+  {
+    key: 'filament',
+    icon: Pencil,
+    label: 'Set filament',
+    text: 'Types the brand, material and colour into the lane by hand — for spools with no tag, or to correct a tag. Writes nothing to the tag itself.'
+  },
+  {
+    key: 'reset',
+    icon: Eraser,
+    label: 'Clear detection',
+    text: 'Throws away what the printer currently thinks is in this lane, leaving it blank until the tag is read again. Nothing is deleted from your inventory.'
+  }
+];
+
+const guideText = (key) => BUTTON_GUIDE.find(g => g.key === key)?.text || '';
 
 function remainingPercent(spool) {
   if (!spool) return null;
@@ -34,7 +91,22 @@ export default function PrinterPage({ spools = [], printerUrl = '', onSavePrinte
   const [editor, setEditor] = useState(null);   // { lane, vendor, material, subType, colour }
   const [creator, setCreator] = useState(null); // { lane, name, brand, material, subType, colour, netWeight, ... }
   const [creating, setCreating] = useState(false);
+  // Loading/unloading runs for a minute or more, so it gets its own busy state
+  // with a message rather than the per-lane spinner the quick actions use.
+  const [feeding, setFeeding] = useState(null); // { lane, mode }
+  const [showScreen, setShowScreen] = useState(false);
+  const [showGuide, setShowGuide] = useState(() => {
+    try { return localStorage.getItem('spoolkeep.printerGuide') !== 'hidden'; }
+    catch { return true; }
+  });
   const pollRef = useRef(null);
+
+  function toggleGuide() {
+    setShowGuide(v => {
+      try { localStorage.setItem('spoolkeep.printerGuide', v ? 'hidden' : 'shown'); } catch { /* private mode */ }
+      return !v;
+    });
+  }
 
   useEffect(() => { setUrlDraft(printerUrl); }, [printerUrl]);
 
@@ -97,6 +169,30 @@ export default function PrinterPage({ spools = [], printerUrl = '', onSavePrinte
 
   async function unlinkLane(lane) {
     await laneAction(lane, 'spool', { spoolmanId: 0 }, `Extruder ${lane.extruder} unlinked.`);
+  }
+
+  // Load/unload is one long blocking request to the printer (it heats, feeds,
+  // and reports back when the routine is done), so this does not reuse
+  // laneAction's quick-action spinner or its 600ms re-read.
+  async function feedLane(lane, mode) {
+    setFeeding({ lane: lane.lane, mode });
+    try {
+      const res = await fetch(`/api/printer/lane/${mode}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channel: lane.channel })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Printer rejected the command');
+      toast.success(mode === 'load'
+        ? `Extruder ${lane.extruder} loaded into the nozzle.`
+        : `Extruder ${lane.extruder} unloaded.`);
+    } catch (e) {
+      toast.error(e.message);
+    } finally {
+      setFeeding(null);
+      loadLanes(false);
+    }
   }
 
   async function refreshLane(lane) {
@@ -227,6 +323,15 @@ export default function PrinterPage({ spools = [], printerUrl = '', onSavePrinte
         </div>
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
           <StatusDot ok={state.reachable} label={state.reachable ? 'Connected' : 'Offline'} />
+          <button
+            className="btn btn-secondary"
+            onClick={() => setShowScreen(v => !v)}
+            disabled={!state.configured}
+            title="Mirror the printer's own touchscreen here, and tap it from the browser"
+            style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+          >
+            <Monitor size={16} /> {showScreen ? 'Hide screen' : 'Printer screen'}
+          </button>
           <button className="btn btn-secondary" onClick={() => loadLanes(true)} disabled={loading} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
             <RefreshCw size={16} className={loading ? 'spin' : undefined} /> Reload
           </button>
@@ -283,12 +388,27 @@ export default function PrinterPage({ spools = [], printerUrl = '', onSavePrinte
         </div>
       )}
 
+      {showScreen && state.configured && <PrinterScreen onClose={() => setShowScreen(false)} />}
+
+      {lanes.length > 0 && <ButtonGuide open={showGuide} onToggle={toggleGuide} />}
+
+      {state.feedBlocked && lanes.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.78rem', color: 'var(--md-sys-color-outline)', marginBottom: '0.75rem' }}>
+          <Info size={14} style={{ flexShrink: 0 }} /> {state.feedBlocked}
+        </div>
+      )}
+
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1rem' }}>
         {lanes.map(lane => (
           <LaneCard
             key={lane.lane}
             lane={lane}
             busy={busyLane === lane.lane}
+            feedingMode={feeding?.lane === lane.lane ? feeding.mode : null}
+            feedBlocked={state.feedBlocked || (feeding ? 'Another lane is being loaded or unloaded.' : null)}
+            isActive={state.activeExtruder === lane.channel}
+            onLoad={() => feedLane(lane, 'load')}
+            onUnload={() => feedLane(lane, 'unload')}
             onPick={() => setPicker({ lane })}
             onNew={() => openCreator(lane)}
             onUnlink={() => unlinkLane(lane)}
@@ -363,10 +483,15 @@ function Badge({ children, tone = 'outline', title }) {
   );
 }
 
-function LaneCard({ lane, busy, onPick, onNew, onUnlink, onRefresh, onReset, onEdit }) {
+function LaneCard({
+  lane, busy, feedingMode, feedBlocked, isActive,
+  onLoad, onUnload, onPick, onNew, onUnlink, onRefresh, onReset, onEdit
+}) {
   const spool = lane.currentSpool;
   const remaining = remainingPercent(spool);
   const swatches = lane.colours?.length ? lane.colours : [lane.colorHex || 'FFFFFF'];
+  const btn = { fontSize: '0.75rem', padding: '0.35rem 0.7rem', display: 'flex', alignItems: 'center', gap: '0.3rem' };
+  const hint = { fontSize: '0.68rem', lineHeight: 1.35, color: 'var(--md-sys-color-outline)', margin: '0.3rem 0 0' };
 
   return (
     <div style={{
@@ -377,9 +502,15 @@ function LaneCard({ lane, busy, onPick, onNew, onUnlink, onRefresh, onReset, onE
       opacity: lane.empty ? 0.65 : 1,
       position: 'relative'
     }}>
-      {busy && (
-        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: 'var(--md-sys-color-surface-container-high)', opacity: 0.75, borderRadius: 'var(--md-shape-corner-large)', zIndex: 2 }}>
+      {(busy || feedingMode) && (
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', textAlign: 'center', padding: '1rem', backgroundColor: 'var(--md-sys-color-surface-container-high)', opacity: 0.92, borderRadius: 'var(--md-shape-corner-large)', zIndex: 2 }}>
           <Loader2 size={20} className="spin" />
+          {feedingMode && (
+            <div style={{ fontSize: '0.75rem', color: 'var(--md-sys-color-outline)' }}>
+              {feedingMode === 'load' ? 'Heating and loading…' : 'Heating and unloading…'}
+              <br />This takes a minute or two — watch the printer.
+            </div>
+          )}
         </div>
       )}
 
@@ -403,6 +534,7 @@ function LaneCard({ lane, busy, onPick, onNew, onUnlink, onRefresh, onReset, onE
       </div>
 
       <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap', marginTop: '0.6rem' }}>
+        {isActive && <Badge tone="primary" title="The printer's active extruder">in use</Badge>}
         {lane.official && <Badge tone="primary">official</Badge>}
         {lane.cardUid && <Badge><CreditCard size={9} /> {lane.cardType || 'RFID'}</Badge>}
         {lane.currentSpoolId > 0 && <Badge tone="primary">spool #{lane.currentSpoolId}</Badge>}
@@ -447,31 +579,251 @@ function LaneCard({ lane, busy, onPick, onNew, onUnlink, onRefresh, onReset, onE
         </div>
       )}
 
-      <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap', marginTop: '0.85rem' }}>
-        <button className="btn btn-primary" onClick={onPick} style={{ fontSize: '0.75rem', padding: '0.35rem 0.7rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-          <Link2 size={13} /> {lane.currentSpoolId > 0 ? 'Change spool' : 'Link spool'}
-        </button>
-        {(lane.cardUid || lane.vendor || lane.material) && lane.matchedBy !== 'card' && (
-          <button className="btn btn-secondary" onClick={onNew} title="Add this filament to the inventory as a new spool and link the lane to it" style={{ fontSize: '0.75rem', padding: '0.35rem 0.7rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-            <Plus size={13} /> New spool
+      {/* Each group of buttons says underneath what it does, because none of
+          this is guessable from an icon and a two-word label. */}
+      <div style={{ marginTop: '0.85rem', paddingTop: '0.75rem', borderTop: '1px solid var(--md-sys-color-outline-variant)' }}>
+        <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+          <button
+            className="btn btn-primary"
+            onClick={onLoad}
+            disabled={!!feedBlocked}
+            title={feedBlocked || guideText('load')}
+            style={btn}
+          >
+            <ArrowDownToLine size={13} /> Load
           </button>
-        )}
-        {lane.currentSpoolId > 0 && (
-          <button className="btn btn-secondary" onClick={onUnlink} style={{ fontSize: '0.75rem', padding: '0.35rem 0.7rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-            <Unlink size={13} /> Unlink
+          <button
+            className="btn btn-secondary"
+            onClick={onUnload}
+            disabled={!!feedBlocked}
+            title={feedBlocked || guideText('unload')}
+            style={btn}
+          >
+            <ArrowUpFromLine size={13} /> Unload
           </button>
-        )}
-        <button className="btn btn-secondary" onClick={onRefresh} title="Re-read this lane's RFID tag" style={{ fontSize: '0.75rem', padding: '0.35rem 0.7rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-          <RefreshCw size={13} /> Re-read
-        </button>
-        <button className="btn btn-secondary" onClick={onEdit} title="Set this lane's filament by hand" style={{ fontSize: '0.75rem', padding: '0.35rem 0.7rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-          <Pencil size={13} /> Filament
-        </button>
-        <button className="btn btn-secondary" onClick={onReset} title="Clear this lane's detected filament" style={{ fontSize: '0.75rem', padding: '0.35rem 0.7rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-          <Eraser size={13} /> Reset
-        </button>
+        </div>
+        <p style={hint}>
+          Moves filament: <strong>Load</strong> feeds this lane into the nozzle (unloading
+          whatever is in there first), <strong>Unload</strong> pulls it back out. The printer
+          heats up and runs the routine itself — a minute or two.
+        </p>
+      </div>
+
+      <div style={{ marginTop: '0.75rem' }}>
+        <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+          <button className="btn btn-secondary" onClick={onPick} title={guideText('link')} style={btn}>
+            <Link2 size={13} /> {lane.currentSpoolId > 0 ? 'Change spool' : 'Link spool'}
+          </button>
+          {(lane.cardUid || lane.vendor || lane.material) && lane.matchedBy !== 'card' && (
+            <button className="btn btn-secondary" onClick={onNew} title={guideText('new')} style={btn}>
+              <Plus size={13} /> New spool
+            </button>
+          )}
+          {lane.currentSpoolId > 0 && (
+            <button className="btn btn-secondary" onClick={onUnlink} title={guideText('unlink')} style={btn}>
+              <Unlink size={13} /> Unlink
+            </button>
+          )}
+        </div>
+        <p style={hint}>
+          Bookkeeping only: which inventory spool this lane holds, so filament used while
+          printing is counted against it. Moves no filament.
+        </p>
+      </div>
+
+      <div style={{ marginTop: '0.75rem' }}>
+        <div style={{ display: 'flex', gap: '0.35rem', flexWrap: 'wrap' }}>
+          <button className="btn btn-secondary" onClick={onRefresh} title={guideText('reread')} style={btn}>
+            <RefreshCw size={13} /> Re-read tag
+          </button>
+          <button className="btn btn-secondary" onClick={onEdit} title={guideText('filament')} style={btn}>
+            <Pencil size={13} /> Set filament
+          </button>
+          <button className="btn btn-secondary" onClick={onReset} title={guideText('reset')} style={btn}>
+            <Eraser size={13} /> Clear detection
+          </button>
+        </div>
+        <p style={hint}>
+          What the printer thinks is in the lane: scan the RFID tag again, type the filament
+          in by hand, or clear the detection. Never writes to the tag.
+        </p>
       </div>
     </div>
+  );
+}
+
+// Collapsible, one row per button. The per-card hints say what a group does;
+// this says what each individual button does, for when that is not enough.
+function ButtonGuide({ open, onToggle }) {
+  return (
+    <section style={{
+      marginBottom: '1rem',
+      border: '1px solid var(--md-sys-color-outline-variant)',
+      borderRadius: 'var(--md-shape-corner-medium)',
+      backgroundColor: 'var(--md-sys-color-surface-container)'
+    }}>
+      <button
+        type="button"
+        onClick={onToggle}
+        style={{
+          width: '100%', display: 'flex', alignItems: 'center', gap: '0.5rem',
+          padding: '0.6rem 0.9rem', background: 'none', border: 'none', cursor: 'pointer',
+          color: 'inherit', font: 'inherit', fontSize: '0.85rem', fontWeight: 600, textAlign: 'left'
+        }}
+      >
+        <Info size={15} /> What these buttons do
+        <span style={{ marginLeft: 'auto', display: 'flex' }}>
+          {open ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+        </span>
+      </button>
+      {open && (
+        <dl style={{ margin: 0, padding: '0 0.9rem 0.9rem', display: 'grid', gridTemplateColumns: 'minmax(130px, auto) 1fr', gap: '0.5rem 0.9rem', fontSize: '0.78rem' }}>
+          {BUTTON_GUIDE.map(({ key, icon: Icon, label, text }) => (
+            <div key={key} style={{ display: 'contents' }}>
+              <dt style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontWeight: 600 }}>
+                <Icon size={13} style={{ flexShrink: 0 }} /> {label}
+              </dt>
+              <dd style={{ margin: 0, color: 'var(--md-sys-color-outline)', lineHeight: 1.45 }}>{text}</dd>
+            </div>
+          ))}
+        </dl>
+      )}
+    </section>
+  );
+}
+
+// Live mirror of the printer's own touchscreen, proxied through the SpoolKeep
+// backend (/api/printer/screen/*). The firmware serves a PNG snapshot of the
+// panel and accepts injected down/move/up touches at image coordinates, so
+// this is the printer's real UI — the same screen that can load and unload
+// filament, run calibrations, and answer prompts.
+function PrinterScreen({ onClose }) {
+  const imgRef = useRef(null);
+  const [status, setStatus] = useState('loading'); // loading | live | unavailable
+  const [error, setError] = useState('');
+  const dragRef = useRef(false);
+  // Kept in refs so the polling loop never restarts and the <img> never flickers.
+  const etagRef = useRef('');
+  const inFlightRef = useRef(false);
+  const urlRef = useRef('');
+
+  useEffect(() => {
+    let stopped = false;
+
+    async function tick() {
+      if (stopped || inFlightRef.current || document.hidden) return;
+      inFlightRef.current = true;
+      try {
+        const headers = etagRef.current ? { 'If-None-Match': etagRef.current } : {};
+        const res = await fetch(`/api/printer/screen/snapshot?ts=${Date.now()}`, { headers });
+        if (res.status === 304) {
+          setStatus('live');
+        } else if (res.ok) {
+          const tag = res.headers.get('ETag');
+          if (tag) etagRef.current = tag;
+          const url = URL.createObjectURL(await res.blob());
+          if (imgRef.current) imgRef.current.src = url;
+          if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+          urlRef.current = url;
+          setStatus('live');
+          setError('');
+        } else {
+          const data = await res.json().catch(() => ({}));
+          setStatus('unavailable');
+          setError(res.status === 404
+            ? 'The printer is not serving its screen. Enable the screen mirror in the extended firmware\'s settings.'
+            : (data.error || 'Could not read the printer\'s screen.'));
+        }
+      } catch (e) {
+        setStatus('unavailable');
+        setError(e.message);
+      } finally {
+        inFlightRef.current = false;
+      }
+    }
+
+    tick();
+    const timer = setInterval(tick, 250);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+      if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+    };
+  }, []);
+
+  // Map a browser coordinate onto the panel's own pixel grid, which is what
+  // the firmware's touch endpoint expects.
+  function imageCoords(clientX, clientY) {
+    const img = imgRef.current;
+    if (!img) return null;
+    const rect = img.getBoundingClientRect();
+    if (!rect.width || !rect.height || !img.naturalWidth) return null;
+    return {
+      x: Math.round((clientX - rect.left) * (img.naturalWidth / rect.width)),
+      y: Math.round((clientY - rect.top) * (img.naturalHeight / rect.height))
+    };
+  }
+
+  function sendTouch(action, clientX, clientY) {
+    const c = imageCoords(clientX, clientY);
+    if (!c || c.x < 0 || c.y < 0) return;
+    fetch(`/api/printer/screen/touch?a=${action}&x=${c.x}&y=${c.y}`, { method: 'POST' })
+      .catch(() => { /* a dropped touch is not worth a toast */ });
+  }
+
+  return (
+    <section style={{
+      marginBottom: '1rem', padding: '0.75rem',
+      border: '1px solid var(--md-sys-color-outline-variant)',
+      borderRadius: 'var(--md-shape-corner-large)',
+      backgroundColor: 'var(--md-sys-color-surface-container-high)'
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.6rem' }}>
+        <Monitor size={16} />
+        <strong style={{ fontSize: '0.85rem' }}>Printer screen</strong>
+        <span style={{ fontSize: '0.72rem', color: 'var(--md-sys-color-outline)' }}>
+          {status === 'live' ? 'live — click or tap it like the real panel' : status === 'loading' ? 'connecting…' : 'not available'}
+        </span>
+        <button className="btn btn-secondary" onClick={onClose} style={{ marginLeft: 'auto', fontSize: '0.72rem', padding: '0.25rem 0.6rem' }}>
+          <X size={13} /> Hide
+        </button>
+      </div>
+
+      {status === 'unavailable' && (
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.5rem', fontSize: '0.78rem', color: 'var(--md-sys-color-error)', padding: '0.5rem 0' }}>
+          <AlertCircle size={15} style={{ flexShrink: 0, marginTop: '0.1rem' }} />
+          <div>{error}</div>
+        </div>
+      )}
+
+      <div style={{ display: status === 'unavailable' ? 'none' : 'flex', justifyContent: 'center', backgroundColor: '#1a1a1a', borderRadius: 'var(--md-shape-corner-medium)', overflow: 'hidden' }}>
+        <img
+          ref={imgRef}
+          alt="The printer's touchscreen"
+          draggable={false}
+          style={{ maxWidth: '100%', maxHeight: '60vh', cursor: 'crosshair', touchAction: 'none', display: 'block' }}
+          onPointerDown={e => {
+            e.preventDefault();
+            e.currentTarget.setPointerCapture?.(e.pointerId);
+            dragRef.current = true;
+            sendTouch('down', e.clientX, e.clientY);
+          }}
+          onPointerMove={e => { if (dragRef.current) sendTouch('move', e.clientX, e.clientY); }}
+          onPointerUp={e => {
+            if (!dragRef.current) return;
+            dragRef.current = false;
+            sendTouch('up', e.clientX, e.clientY);
+          }}
+          onPointerCancel={() => { dragRef.current = false; }}
+        />
+      </div>
+
+      <p style={{ fontSize: '0.7rem', color: 'var(--md-sys-color-outline)', margin: '0.5rem 0 0' }}>
+        This is the printer's own panel, mirrored through SpoolKeep. Everything on it works,
+        including its Load and Unload screens — handy when the printer asks a question
+        mid-routine and you are not standing next to it.
+      </p>
+    </section>
   );
 }
 
